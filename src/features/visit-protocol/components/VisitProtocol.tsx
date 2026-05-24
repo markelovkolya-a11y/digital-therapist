@@ -788,7 +788,7 @@ useEffect(() => {
                 </div>
               </Section>
 
-                            {/* 6. Диагноз */}
+                             {/* 6. Диагноз */}
               <Section id="diagnosis" title="Диагноз" icon="🏥"
                 expanded={expandedSections.includes('diagnosis')} onToggle={() => toggleSection('diagnosis')}>
                 <div className="space-y-3">
@@ -798,9 +798,7 @@ useEffect(() => {
                     <div className="flex items-center justify-between mb-1.5">
                       <span className="text-xs font-semibold" style={{ color: 'var(--color-foreground)' }}>Основной</span>
                       {currentVisit.diagnosis.primary.code && (
-                        <button onClick={() => {
-                          setShowRotateDiagnosis(true);
-                        }}
+                        <button onClick={() => setShowRotateDiagnosis(true)}
                           className="text-xs px-2 py-0.5 rounded border"
                           style={{ borderColor: 'var(--color-border)', color: 'var(--color-muted-foreground)' }}>
                           🔄 Сменить основной
@@ -841,7 +839,7 @@ useEffect(() => {
                   {/* Осложнения */}
                   <div>
                     <div className="flex items-center justify-between mb-1">
-                      <span className="text-xs font-semibold" style={{ color: 'var(--color-foreground)' }}>Осложнения</span>
+                      <span className="text-xs font-semibold" style={{ color: 'var(--color-foreground)' }}>Осложнения основного</span>
                       <button onClick={() => { setIcd10Target('complications'); setShowICD10Search(true); }}
                         className="text-xs px-2 py-1 rounded border"
                         style={{ borderColor: 'var(--color-border)', color: 'var(--color-muted-foreground)' }}>+ Добавить</button>
@@ -875,28 +873,6 @@ useEffect(() => {
                             onRemove={() => removeDiagnosisItem('concomitant', d.code)}
                             onChangeName={(name) => updateDiagnosisItemName('concomitant', d.code, name)}
                             onSelectFormulation={() => { setFormulationTarget({ type: 'concomitant', code: d.code }); setShowFormulationModal(true); }} />
-                        ))}
-                      </div>
-                    ) : (
-                      <div className="text-xs" style={{ color: 'var(--color-muted-foreground)' }}>(нет)</div>
-                    )}
-                  </div>
-
-                  {/* Фоновые */}
-                  <div>
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="text-xs font-semibold" style={{ color: 'var(--color-foreground)' }}>Фоновые</span>
-                      <button onClick={() => { setIcd10Target('background'); setShowICD10Search(true); }}
-                        className="text-xs px-2 py-1 rounded border"
-                        style={{ borderColor: 'var(--color-border)', color: 'var(--color-muted-foreground)' }}>+ Добавить</button>
-                    </div>
-                    {currentVisit.diagnosis.background.length > 0 ? (
-                      <div className="space-y-1">
-                        {currentVisit.diagnosis.background.map(d => (
-                          <DiagnosisBadge key={d.code} item={d}
-                            onRemove={() => removeDiagnosisItem('background', d.code)}
-                            onChangeName={(name) => updateDiagnosisItemName('background', d.code, name)}
-                            onSelectFormulation={() => { setFormulationTarget({ type: 'background', code: d.code }); setShowFormulationModal(true); }} />
                         ))}
                       </div>
                     ) : (
@@ -1238,7 +1214,6 @@ useEffect(() => {
         case 'primary': updatePrimaryDiagnosis({ code, name }); break;
         case 'complications': addDiagnosisItem('complications', { code, name }); break;
         case 'concomitant': addDiagnosisItem('concomitant', { code, name }); break;
-        case 'background': addDiagnosisItem('background', { code, name }); break;
       }
     }
     setShowICD10Search(false);
@@ -1305,12 +1280,11 @@ useEffect(() => {
       <div className="mb-3">
         <label className="block text-xs mb-1">Куда перенести старый основной?</label>
         <select value={rotateTarget} onChange={e => setRotateTarget(e.target.value as any)}
-          className="w-full px-3 py-2 rounded-lg border text-sm"
-          style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-background)', color: 'var(--color-foreground)' }}>
-          <option value="concomitant">В сопутствующие</option>
-          <option value="background">В фоновые</option>
-          <option value="complications">В осложнения</option>
-        </select>
+  className="w-full px-3 py-2 rounded-lg border text-sm"
+  style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-background)', color: 'var(--color-foreground)' }}>
+  <option value="concomitant">В сопутствующие</option>
+  <option value="complications">В осложнения</option>
+</select>
       </div>
 
       <div className="flex gap-2">
