@@ -25,7 +25,8 @@ export type EventType =
   | 'emias_import'
   | 'visit_note'
   | 'doctor_comment'
-  | 'life_history';
+  | 'life_history'
+  |'biopsychosocial_assessment';
 
 export type EventSource =
   | 'patient_reported'

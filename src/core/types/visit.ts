@@ -2,6 +2,7 @@
 // v1.0.0 — Типы для протокола осмотра (полная версия)
 
 import { EventParameter } from './events';
+import { BiopsychosocialProfile } from './biopsychosocial';
 
 export type VisitType = 'treatment' | 'prophylactic' | 'dispensary' | 'active' | 'palliative';
 
@@ -27,6 +28,7 @@ export interface VisitState {
   examinationPlan: ExaminationPlanState;
   treatment: TreatmentState;
   followUp: FollowUpState;
+  biopsychosocialProfile?: BiopsychosocialProfile | null;
 }
 
 // ========== ВИТАЛЬНЫЕ ПОКАЗАТЕЛИ ==========
@@ -112,10 +114,12 @@ export interface ExaminationPlanState {
 
 // ========== ЛЕЧЕНИЕ ==========
 export interface TreatmentState {
-  nonDrug: string[];             // Выбранные чипсы
-  nonDrugText: string;           // Полный текст
+  nonDrug: string[];
+  nonDrugText: string;
   medications: MedicationState[];
-  basicTherapy: MedicationState[]; // Подтянуто из прошлого
+  basicTherapy: MedicationState[];
+  tactic: 'aggressive' | 'moderate' | 'safe';   // ← добавить
+  tacticRationale: string;                         // ← добавить
 }
 
 export interface MedicationState {

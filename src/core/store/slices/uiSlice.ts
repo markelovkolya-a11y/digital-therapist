@@ -15,6 +15,8 @@ import { complaintsRepo } from '@core/database/repositories/complaints.repo';
 import { DEFAULT_COMPLAINTS } from '@core/data/defaultComplaints';
 import { facilitiesRepo } from '@core/database/repositories/facilities.repo';
 import { DEFAULT_FACILITIES } from '@core/data/defaultFacilities';
+import { symptomGuidesRepo } from '@core/database/repositories/symptomGuides.repo';
+import { DEFAULT_SYMPTOM_GUIDES } from '@core/data/defaultSymptomGuides';
 
 export const createUISlice: StateCreator<AppStore, [], [], UISlice> = (set, get) => ({
   initialized: false,
@@ -100,6 +102,17 @@ export const createUISlice: StateCreator<AppStore, [], [], UISlice> = (set, get)
   }
 } catch (e) {
   console.warn('⚠️ Не удалось импортировать места:', e);
+}
+
+try {
+  const guides = await symptomGuidesRepo.findAll();
+  if (guides.length === 0) {
+    for (const g of DEFAULT_SYMPTOM_GUIDES) {
+      await symptomGuidesRepo.create(g);
+    }
+  }
+} catch (e) {
+  console.warn('⚠️ Не удалось импортировать симптом-помощник:', e);
 }
 
       set({ initialized: true });

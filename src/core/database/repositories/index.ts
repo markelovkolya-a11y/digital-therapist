@@ -10,3 +10,4 @@ export { settingsRepo } from './settings.repo';
 export { complaintsRepo } from './complaints.repo';
 export { facilitiesRepo } from './facilities.repo';
 export { problemsRepo } from './problems.repo';
+export { symptomGuidesRepo } from './symptomGuides.repo';

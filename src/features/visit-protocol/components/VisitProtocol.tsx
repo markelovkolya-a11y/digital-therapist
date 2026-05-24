@@ -1,12 +1,12 @@
 // features/visit-protocol/components/VisitProtocol.tsx
-// v2.3.0 — Сброс протокола при смене пациента, toast, базовая терапия вверх
+// v2.7.0 — Обязательные поля + подсветка + депрескрайбинг + STOPP + тактика + профиль
 
 import { useEffect, useState, useCallback } from 'react';
 import { useAppStore } from '@core/store';
 import { calculateAge, formatDateRu } from '@core/utils/date';
 import {
   User, Save, ChevronDown, ChevronRight, Plus, X, Check,
-  TrendingUp, TrendingDown, Minus, Search, FileText, PanelLeftClose, PanelLeftOpen, Edit3,
+  TrendingUp, TrendingDown, Minus, Search, FileText, PanelLeftClose, PanelLeftOpen, Edit3, Activity,
 } from 'lucide-react';
 import {
   SYSTEM_EXAM_TEMPLATES,
@@ -17,6 +17,7 @@ import {
   LIFE_HISTORY_SNIPPETS,
 } from '@core/data/examTemplates';
 import { findInteractions, DrugInteractionRule } from '@core/data/drugInteractions';
+import { checkStoppCriteria } from '@core/data/stoppCriteria';
 import { ComplaintItem } from '@core/types/visit';
 import { ICD10SearchModal } from './ICD10SearchModal';
 import { FormulationSelectModal } from './FormulationSelectModal';
@@ -25,19 +26,27 @@ import { ProtocolGenerator } from './ProtocolGenerator';
 import { ContextColumn } from './ContextColumn';
 import { DrugSafetyAlert } from './DrugSafetyAlert';
 import { PreVisitSummary } from './PreVisitSummary';
+import { BiopsychosocialModal } from './BiopsychosocialModal';
 import { useSnippets } from '../hooks/useSnippets';
 import { useAutoSave } from '../hooks/useAutoSave';
 import { complaintsRepo } from '@core/database/repositories/complaints.repo';
+import { SymptomHelperModal } from './SymptomHelperModal';
+import { checkRedFlags } from '@core/data/redFlags';
 
 // ========== ВСПОМОГАТЕЛЬНЫЕ КОМПОНЕНТЫ ==========
 
-function Section({ id, title, icon, expanded, onToggle, badge, children }: {
+function Section({ id, title, icon, expanded, onToggle, badge, highlight, children }: {
   id: string; title: string; icon?: string;
   expanded: boolean; onToggle: () => void;
-  badge?: string; children: React.ReactNode;
+  badge?: string; highlight?: boolean;
+  children: React.ReactNode;
 }) {
   return (
-    <div className="rounded-xl border overflow-hidden" style={{ backgroundColor: 'var(--color-card)', borderColor: 'var(--color-border)' }}>
+    <div className="rounded-xl border overflow-hidden" style={{
+      backgroundColor: 'var(--color-card)',
+      borderColor: highlight ? '#ef4444' : 'var(--color-border)',
+      boxShadow: highlight ? '0 0 0 1px #ef4444' : 'none',
+    }}>
       <button onClick={onToggle}
         className="flex items-center gap-2 w-full px-4 py-3 text-left text-sm font-semibold hover:bg-muted/30 transition-colors"
         style={{ color: 'var(--color-foreground)' }}>
@@ -224,10 +233,11 @@ function DiagnosisBadge({ item, onRemove, onChangeName, onSelectFormulation }: {
   );
 }
 
-function MedicationRow({ med, onRemove, onEdit }: {
+function MedicationRow({ med, onRemove, onEdit, onDeprescribe }: {
   med: import('@core/types/visit').MedicationState;
   onRemove: () => void;
   onEdit: () => void;
+  onDeprescribe: () => void;
 }) {
   return (
     <div className="flex items-center gap-2 px-3 py-2 rounded-lg border text-sm"
@@ -242,7 +252,9 @@ function MedicationRow({ med, onRemove, onEdit }: {
       {med.isContinued && (
         <span className="px-1.5 py-0.5 rounded text-xs" style={{ backgroundColor: '#dcfce7', color: '#166534' }}>продолжает</span>
       )}
-      <button onClick={onEdit} className="ml-auto p-1 rounded hover:bg-muted" style={{ color: 'var(--color-muted-foreground)' }} title="Редактировать">
+      <button onClick={onDeprescribe} className="ml-auto p-1 rounded hover:bg-muted text-xs"
+        style={{ color: '#ef4444' }} title="Депрескрайбинг (отмена с причиной)">🗑️</button>
+      <button onClick={onEdit} className="p-1 rounded hover:bg-muted" style={{ color: 'var(--color-muted-foreground)' }} title="Редактировать">
         <Edit3 size={12} />
       </button>
       <button onClick={onRemove} className="p-1 rounded hover:bg-muted" style={{ color: 'var(--color-muted-foreground)' }}>
@@ -300,6 +312,7 @@ export function VisitProtocol() {
   const [formulationTarget, setFormulationTarget] = useState<{ type: 'primary' | 'complications' | 'concomitant' | 'background'; code?: string }>({ type: 'primary' });
   const [showMedicationSearch, setShowMedicationSearch] = useState(false);
   const [showProtocolGenerator, setShowProtocolGenerator] = useState(false);
+  const [showBiopsychosocial, setShowBiopsychosocial] = useState(false);
   const [newMed, setNewMed] = useState({ name: '', dose: '', frequency: '', duration: '30 дней', isBasic: false });
   const [labCustomInput, setLabCustomInput] = useState('');
   const [instrCustomInput, setInstrCustomInput] = useState('');
@@ -308,8 +321,14 @@ export function VisitProtocol() {
   const [newComplaintInput, setNewComplaintInput] = useState('');
   const [drugInteractions, setDrugInteractions] = useState<DrugInteractionRule[]>([]);
   const [showDrugAlerts, setShowDrugAlerts] = useState(true);
+  const [stoppAlerts, setStoppAlerts] = useState<any[]>([]);
   const [autoSaveStatus, setAutoSaveStatus] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [validationErrors, setValidationErrors] = useState<string[]>([]);
+  const [deprescribeTarget, setDeprescribeTarget] = useState<{ id: string; name: string } | null>(null);
+  const [deprescribeReason, setDeprescribeReason] = useState('');
+  const [showSymptomHelper, setShowSymptomHelper] = useState(false);
+  const [redFlags, setRedFlags] = useState<any[]>([]);
 
   const selectedPatient = patients.find(p => p.id === selectedPatientId);
 
@@ -323,6 +342,7 @@ export function VisitProtocol() {
 
   useEffect(() => { complaintsRepo.findAll().then(setComplaintTemplates); }, []);
 
+  // Лекарственные взаимодействия
   useEffect(() => {
     if (!currentVisit) return;
     const medNames = currentVisit.treatment.medications.map(m => m.name);
@@ -330,6 +350,17 @@ export function VisitProtocol() {
     setDrugInteractions(findInteractions(medNames));
   }, [currentVisit?.treatment.medications]);
 
+  // STOPP-проверка
+  useEffect(() => {
+    if (!currentVisit || !selectedPatient) return;
+    const age = calculateAge(selectedPatient.birthDate);
+    if (age < 65) { setStoppAlerts([]); return; }
+    const meds = currentVisit.treatment.medications.map(m => m.name);
+    const diag = [currentVisit.diagnosis.primary.code].filter(Boolean);
+    setStoppAlerts(checkStoppCriteria(meds, diag, age));
+  }, [currentVisit?.treatment.medications]);
+
+  // Быстрые клавиши
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); saveVisit(); }
@@ -340,16 +371,31 @@ export function VisitProtocol() {
   }, [saveVisit]);
 
   // Индикатор автосохранения
-useEffect(() => {
-  const interval = setInterval(() => {
-    if (currentVisit && currentVisit.status === 'draft') {
-      localStorage.setItem(`visit_draft_${currentVisit.patientId}`, JSON.stringify(currentVisit));
-      setAutoSaveStatus('💾 Черновик сохранён');
-      setTimeout(() => setAutoSaveStatus(null), 2000);
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (currentVisit && currentVisit.status === 'draft') {
+        localStorage.setItem(`visit_draft_${currentVisit.patientId}`, JSON.stringify(currentVisit));
+        setAutoSaveStatus('💾 Черновик сохранён');
+        setTimeout(() => setAutoSaveStatus(null), 2000);
+      }
+    }, 30000);
+    return () => clearInterval(interval);
+  }, [currentVisit]);
+
+  // Сброс ошибок валидации при изменении данных
+  useEffect(() => {
+    if (validationErrors.length > 0) {
+      setValidationErrors([]);
     }
-  }, 30000);
-  return () => clearInterval(interval);
-}, [currentVisit]);
+  }, [currentVisit?.diagnosis.primary.code, currentVisit?.complaints, currentVisit?.treatment.medications]);
+
+  // Красные флаги
+useEffect(() => {
+  if (!currentVisit) return;
+  const complaintNames = currentVisit.complaints.map(c => c.name);
+  if (complaintNames.length === 0) { setRedFlags([]); return; }
+  setRedFlags(checkRedFlags(complaintNames));
+}, [currentVisit?.complaints]);
 
   const toggleSection = (id: string) => {
     setExpandedSections(prev => prev.includes(id) ? prev.filter(s => s !== id) : [...prev, id]);
@@ -365,43 +411,44 @@ useEffect(() => {
   };
 
   const handleSave = useCallback(async () => {
-  if (!currentVisit) return;
-  
-  // Мягкая проверка
-  const warnings: string[] = [];
-  if (!currentVisit.diagnosis.primary.code) {
-    warnings.push('Не указан основной диагноз');
-  }
-  if (currentVisit.complaints.length === 0 && !currentVisit.anamnesis.text) {
-    warnings.push('Не указаны жалобы и анамнез');
-  }
-  if (currentVisit.treatment.medications.length === 0 && 
-      currentVisit.examinationPlan.labTests.length === 0 &&
-      currentVisit.examinationPlan.instrumental.length === 0 &&
-      currentVisit.examinationPlan.consultations.length === 0) {
-    warnings.push('Не назначено лечение или обследование');
-  }
-  
-  if (warnings.length > 0) {
-    const confirmed = confirm(
-      `Предупреждение:\n${warnings.join('\n')}\n\nВсё равно сохранить протокол?`
-    );
-    if (!confirmed) return;
-  }
-  
-  await saveVisit();
-  if (currentVisit) clearDraft(currentVisit.patientId);
-  showToast('✅ Протокол сохранён');
-}, [saveVisit, currentVisit, clearDraft]);
+    if (!currentVisit) return;
+    
+    const errors: string[] = [];
+    
+    if (!currentVisit.diagnosis.primary.code) {
+      errors.push('diagnosis');
+    }
+    if (currentVisit.complaints.length === 0 && !currentVisit.anamnesis.text) {
+      errors.push('complaints');
+    }
+    if (currentVisit.treatment.medications.length === 0 && 
+        currentVisit.examinationPlan.labTests.length === 0 &&
+        currentVisit.examinationPlan.instrumental.length === 0 &&
+        currentVisit.examinationPlan.consultations.length === 0) {
+      errors.push('treatment');
+    }
+    
+    if (errors.length > 0) {
+      setValidationErrors(errors);
+      showToast('⚠️ Заполните обязательные поля (подсвечены красным)');
+      const sectionsToOpen = new Set(expandedSections);
+      if (errors.includes('diagnosis')) sectionsToOpen.add('diagnosis');
+      if (errors.includes('complaints')) sectionsToOpen.add('complaints');
+      if (errors.includes('treatment')) sectionsToOpen.add('treatment');
+      setExpandedSections([...sectionsToOpen]);
+      setTimeout(() => setValidationErrors([]), 5000);
+      return;
+    }
+    
+    await saveVisit();
+    if (currentVisit) clearDraft(currentVisit.patientId);
+    showToast('✅ Протокол сохранён');
+  }, [saveVisit, currentVisit, clearDraft, expandedSections]);
 
   const handleEditMed = (med: import('@core/types/visit').MedicationState) => {
     setEditingMed({
-      id: med.id,
-      name: med.name,
-      dose: med.dose,
-      frequency: med.frequency,
-      duration: med.duration,
-      isBasic: med.isBasic,
+      id: med.id, name: med.name, dose: med.dose,
+      frequency: med.frequency, duration: med.duration, isBasic: med.isBasic,
     });
     setShowAddMed(true);
   };
@@ -410,10 +457,8 @@ useEffect(() => {
     if (editingMed) {
       removeMedication(editingMed.id);
       addMedication({
-        name: editingMed.name,
-        dose: editingMed.dose,
-        frequency: editingMed.frequency,
-        duration: editingMed.duration,
+        name: editingMed.name, dose: editingMed.dose,
+        frequency: editingMed.frequency, duration: editingMed.duration,
         isBasic: editingMed.isBasic,
       });
       setEditingMed(null);
@@ -423,6 +468,30 @@ useEffect(() => {
     setNewMed({ name: '', dose: '', frequency: '', duration: '30 дней', isBasic: false });
     setShowAddMed(false);
     setEditingMed(null);
+  };
+
+  const handleDeprescribe = (med: import('@core/types/visit').MedicationState) => {
+    setDeprescribeTarget({ id: med.id, name: med.name });
+    setDeprescribeReason('');
+  };
+
+  const confirmDeprescribe = async () => {
+    if (!deprescribeTarget || !currentVisit) return;
+    const { eventRepo } = await import('@core/database/repositories');
+    await eventRepo.create({
+      patientId: currentVisit.patientId,
+      type: 'prescription_stop',
+      source: 'doctor_measured',
+      timestamp: currentVisit.date,
+      title: `Отменено: ${deprescribeTarget.name}`,
+      parameters: [
+        { key: 'drug_name', value: deprescribeTarget.name, unit: '' },
+        { key: 'stop_reason', value: deprescribeReason, unit: '' },
+      ],
+    });
+    removeMedication(deprescribeTarget.id);
+    setDeprescribeTarget(null);
+    showToast(`✅ ${deprescribeTarget.name} отменён`);
   };
 
   const setPriority = (item: string, priority: string, deadlineDays: number) => {
@@ -465,9 +534,8 @@ useEffect(() => {
 
   return (
     <div className="flex h-full">
-      {/* Toast */}
       {toast && (
-        <div className="fixed top-4 right-4 z-50 px-4 py-3 rounded-lg shadow-lg text-sm font-medium animate-fade-in"
+        <div className="fixed top-4 right-4 z-50 px-4 py-3 rounded-lg shadow-lg text-sm font-medium"
           style={{ backgroundColor: '#dcfce7', color: '#166534' }}>
           {toast}
         </div>
@@ -507,14 +575,14 @@ useEffect(() => {
                     {selectedPatient.lastName} {selectedPatient.firstName}, {calculateAge(selectedPatient.birthDate)} лет
                   </p>
                   <div className="flex items-center gap-2 mt-1">
-  <span className="text-xs" style={{ color: 'var(--color-muted-foreground)' }}>Дата осмотра:</span>
-  <input type="date" value={currentVisit.date} onChange={(e) => updateVisitDate(e.target.value)}
-    className="px-2 py-1 rounded border text-xs"
-    style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-card)', color: 'var(--color-foreground)' }} />
-  {autoSaveStatus && (
-    <span className="text-xs" style={{ color: '#10b981' }}>{autoSaveStatus}</span>
-  )}
-</div>
+                    <span className="text-xs" style={{ color: 'var(--color-muted-foreground)' }}>Дата осмотра:</span>
+                    <input type="date" value={currentVisit.date} onChange={(e) => updateVisitDate(e.target.value)}
+                      className="px-2 py-1 rounded border text-xs"
+                      style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-card)', color: 'var(--color-foreground)' }} />
+                    {autoSaveStatus && (
+                      <span className="text-xs" style={{ color: '#10b981' }}>{autoSaveStatus}</span>
+                    )}
+                  </div>
                 </div>
                 <div className="flex gap-2">
                   <button onClick={() => setShowPreVisit(true)}
@@ -535,8 +603,7 @@ useEffect(() => {
                 </div>
               </div>
 
-              {/* 1-4 секции без изменений */}
-              {/* Витальные */}
+              {/* 1. Витальные показатели */}
               <Section id="vitals" title="Витальные показатели" icon="📊"
                 expanded={expandedSections.includes('vitals')} onToggle={() => toggleSection('vitals')}>
                 <div className="grid grid-cols-4 gap-3">
@@ -551,7 +618,7 @@ useEffect(() => {
                 </div>
               </Section>
 
-              {/* Анамнез жизни */}
+              {/* 2. Анамнез жизни */}
               <Section id="life" title="Анамнез жизни" icon="📋"
                 expanded={expandedSections.includes('life')} onToggle={() => toggleSection('life')}>
                 <div className="space-y-3">
@@ -587,10 +654,11 @@ useEffect(() => {
                 </div>
               </Section>
 
-              {/* Жалобы */}
+              {/* 3. Жалобы */}
               <Section id="complaints" title="Жалобы" icon="🩺"
                 expanded={expandedSections.includes('complaints')} onToggle={() => toggleSection('complaints')}
-                badge={currentVisit.complaints.length > 0 ? String(currentVisit.complaints.length) : undefined}>
+                badge={currentVisit.complaints.length > 0 ? String(currentVisit.complaints.length) : undefined}
+                highlight={validationErrors.includes('complaints')}>
                 <div className="space-y-3">
                   <div>
                     <label className="text-xs font-medium mb-1.5 block" style={{ color: 'var(--color-muted-foreground)' }}>Выбрать из справочника</label>
@@ -628,10 +696,24 @@ useEffect(() => {
                       ))}
                     </div>
                   )}
+                  {/* Красные флаги */}
+{redFlags.length > 0 && (
+  <div className="p-3 rounded-lg border" style={{ borderColor: '#ef4444', backgroundColor: '#fef2f2' }}>
+    <div className="flex items-center gap-2 mb-2">
+      <span className="text-xs font-semibold" style={{ color: '#991b1b' }}>🚨 Красные флаги</span>
+    </div>
+    {redFlags.map(flag => (
+      <div key={flag.id} className="text-xs mb-1" style={{ color: '#991b1b' }}>
+        <span className="font-medium">{flag.flag}</span>
+        <div className="opacity-80">{flag.message}</div>
+      </div>
+    ))}
+  </div>
+)}
                 </div>
               </Section>
 
-              {/* Анамнез заболевания */}
+              {/* 4. Анамнез заболевания */}
               <Section id="anamnesis" title="Анамнез заболевания" icon="📅"
                 expanded={expandedSections.includes('anamnesis')} onToggle={() => toggleSection('anamnesis')}>
                 <div className="space-y-3">
@@ -662,7 +744,7 @@ useEffect(() => {
                 </div>
               </Section>
 
-                            {/* 5. Объективный статус */}
+              {/* 5. Объективный статус */}
               <Section id="exam" title="Объективный статус" icon="🔍"
                 expanded={expandedSections.includes('exam')} onToggle={() => toggleSection('exam')}
                 badge={`${currentVisit.physicalExam.filter(s => s.status === 'pathology').length} пат.`}>
@@ -670,20 +752,14 @@ useEffect(() => {
                   <div className="flex gap-2 flex-wrap">
                     <button onClick={setAllSystemsNormal}
                       className="px-3 py-1.5 rounded-lg text-xs font-medium border"
-                      style={{ borderColor: 'var(--color-border)', color: 'var(--color-foreground)' }}>
-                      ✅ Все системы — норма
-                    </button>
+                      style={{ borderColor: 'var(--color-border)', color: 'var(--color-foreground)' }}>✅ Все системы — норма</button>
                     <button onClick={markAllSystemsUnchanged}
                       className="px-3 py-1.5 rounded-lg text-xs font-medium border"
-                      style={{ borderColor: 'var(--color-border)', color: 'var(--color-foreground)' }}>
-                      ✓ Без изменений
-                    </button>
+                      style={{ borderColor: 'var(--color-border)', color: 'var(--color-foreground)' }}>✓ Без изменений</button>
                     {currentVisit.previousExamSystems.length > 0 && (
                       <button onClick={() => loadPreviousSystems()}
                         className="px-3 py-1.5 rounded-lg text-xs font-medium border"
-                        style={{ borderColor: 'var(--color-primary)', color: 'var(--color-primary)' }}>
-                        📋 Перенести из прошлого визита
-                      </button>
+                        style={{ borderColor: 'var(--color-primary)', color: 'var(--color-primary)' }}>📋 Перенести из прошлого визита</button>
                     )}
                   </div>
                   <div className="space-y-1">
@@ -699,7 +775,7 @@ useEffect(() => {
               <Section id="diagnosis" title="Диагноз" icon="🏥"
                 expanded={expandedSections.includes('diagnosis')} onToggle={() => toggleSection('diagnosis')}>
                 <div className="space-y-4">
-                  <div className="p-4 rounded-lg border" style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-background)' }}>
+                  <div className="p-4 rounded-lg border" style={{ borderColor: validationErrors.includes('diagnosis') ? '#ef4444' : 'var(--color-border)', backgroundColor: 'var(--color-background)' }}>
                     <h4 className="text-xs font-semibold mb-2" style={{ color: 'var(--color-foreground)' }}>а) Основное заболевание</h4>
                     <div className="grid grid-cols-[1fr,2fr] gap-3 mb-2">
                       <div>
@@ -708,18 +784,16 @@ useEffect(() => {
                           <button type="button" onClick={() => { setIcd10Target('primary'); setShowICD10Search(true); }}
                             className="w-full px-3 py-2 rounded-lg border text-sm text-left transition-colors hover:bg-muted/50 font-mono"
                             style={{
-                              borderColor: currentVisit.diagnosis.primary.code ? 'var(--color-primary)' : 'var(--color-border)',
-                              backgroundColor: 'var(--color-card)',
+                              borderColor: validationErrors.includes('diagnosis') ? '#ef4444' : currentVisit.diagnosis.primary.code ? 'var(--color-primary)' : 'var(--color-border)',
+                              backgroundColor: validationErrors.includes('diagnosis') ? '#fef2f2' : 'var(--color-card)',
                               color: currentVisit.diagnosis.primary.code ? 'var(--color-primary)' : 'var(--color-muted-foreground)',
                             }}>
-                            {currentVisit.diagnosis.primary.code || '🔍 Выбрать код...'}
+                            {currentVisit.diagnosis.primary.code || '🔍 Выбрать код... (обязательно)'}
                           </button>
                           {currentVisit.diagnosis.primary.code && (
                             <button type="button" onClick={() => { setFormulationTarget({ type: 'primary' }); setShowFormulationModal(true); }}
                               className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded hover:bg-muted"
-                              style={{ color: 'var(--color-muted-foreground)' }} title="Выбрать формулировку">
-                              <FileText size={14} />
-                            </button>
+                              style={{ color: 'var(--color-muted-foreground)' }} title="Выбрать формулировку"><FileText size={14} /></button>
                           )}
                         </div>
                       </div>
@@ -735,7 +809,7 @@ useEffect(() => {
                   </div>
 
                   <div className="p-4 rounded-lg border" style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-background)' }}>
-                    <h4 className="text-xs font-semibold mb-2" style={{ color: 'var(--color-foreground)' }}>б) Осложнения основного заболевания</h4>
+                    <h4 className="text-xs font-semibold mb-2" style={{ color: 'var(--color-foreground)' }}>б) Осложнения</h4>
                     {currentVisit.diagnosis.complications.length > 0 && (
                       <div className="space-y-1.5 mb-3">
                         {currentVisit.diagnosis.complications.map(d => (
@@ -748,13 +822,11 @@ useEffect(() => {
                     )}
                     <button type="button" onClick={() => { setIcd10Target('complications'); setShowICD10Search(true); }}
                       className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs border transition-colors hover:bg-muted/50"
-                      style={{ borderColor: 'var(--color-border)', color: 'var(--color-muted-foreground)' }}>
-                      <Plus size={14} /> Добавить осложнение
-                    </button>
+                      style={{ borderColor: 'var(--color-border)', color: 'var(--color-muted-foreground)' }}><Plus size={14} /> Добавить</button>
                   </div>
 
                   <div className="p-4 rounded-lg border" style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-background)' }}>
-                    <h4 className="text-xs font-semibold mb-2" style={{ color: 'var(--color-foreground)' }}>в) Сопутствующие заболевания</h4>
+                    <h4 className="text-xs font-semibold mb-2" style={{ color: 'var(--color-foreground)' }}>в) Сопутствующие</h4>
                     {currentVisit.diagnosis.concomitant.length > 0 && (
                       <div className="space-y-1.5 mb-3">
                         {currentVisit.diagnosis.concomitant.map(d => (
@@ -767,13 +839,11 @@ useEffect(() => {
                     )}
                     <button type="button" onClick={() => { setIcd10Target('concomitant'); setShowICD10Search(true); }}
                       className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs border transition-colors hover:bg-muted/50"
-                      style={{ borderColor: 'var(--color-border)', color: 'var(--color-muted-foreground)' }}>
-                      <Plus size={14} /> Добавить сопутствующее
-                    </button>
+                      style={{ borderColor: 'var(--color-border)', color: 'var(--color-muted-foreground)' }}><Plus size={14} /> Добавить</button>
                   </div>
 
                   <div className="p-4 rounded-lg border" style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-background)' }}>
-                    <h4 className="text-xs font-semibold mb-2" style={{ color: 'var(--color-foreground)' }}>г) Фоновые заболевания</h4>
+                    <h4 className="text-xs font-semibold mb-2" style={{ color: 'var(--color-foreground)' }}>г) Фоновые</h4>
                     {currentVisit.diagnosis.background.length > 0 && (
                       <div className="space-y-1.5 mb-3">
                         {currentVisit.diagnosis.background.map(d => (
@@ -786,9 +856,7 @@ useEffect(() => {
                     )}
                     <button type="button" onClick={() => { setIcd10Target('background'); setShowICD10Search(true); }}
                       className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs border transition-colors hover:bg-muted/50"
-                      style={{ borderColor: 'var(--color-border)', color: 'var(--color-muted-foreground)' }}>
-                      <Plus size={14} /> Добавить фоновое
-                    </button>
+                      style={{ borderColor: 'var(--color-border)', color: 'var(--color-muted-foreground)' }}><Plus size={14} /> Добавить</button>
                   </div>
                 </div>
               </Section>
@@ -798,11 +866,10 @@ useEffect(() => {
                 expanded={expandedSections.includes('plan')} onToggle={() => toggleSection('plan')}>
                 <div className="space-y-4">
                   <div>
-                    <h4 className="text-xs font-semibold mb-1.5" style={{ color: 'var(--color-foreground)' }}>а) Лабораторные исследования</h4>
+                    <h4 className="text-xs font-semibold mb-1.5" style={{ color: 'var(--color-foreground)' }}>Лабораторные</h4>
                     <div className="flex flex-wrap gap-1.5 mb-2">
                       {COMMON_LAB_TESTS.map(test => (
-                        <Chip key={test} label={test}
-                          active={currentVisit.examinationPlan.labTests.includes(test)}
+                        <Chip key={test} label={test} active={currentVisit.examinationPlan.labTests.includes(test)}
                           onClick={() => toggleExaminationItem('labTests', test)} />
                       ))}
                     </div>
@@ -814,29 +881,15 @@ useEffect(() => {
                             <div key={test} className="flex items-center gap-2 px-3 py-1.5 rounded-lg border text-xs"
                               style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-background)' }}>
                               <span className="flex-1 font-medium" style={{ color: 'var(--color-foreground)' }}>{test}</span>
-                              <select value={prio?.priority || 'P3'}
-                                onChange={e => setPriority(test, e.target.value, prio?.deadlineDays || 7)}
-                                className="px-2 py-1 rounded border text-xs"
-                                style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-card)', color: 'var(--color-foreground)' }}>
-                                <option value="P0">P0</option>
-                                <option value="P1">P1</option>
-                                <option value="P2">P2</option>
-                                <option value="P3">P3</option>
-                                <option value="P4">P4</option>
+                              <select value={prio?.priority || 'P3'} onChange={e => setPriority(test, e.target.value, prio?.deadlineDays || 7)}
+                                className="px-2 py-1 rounded border text-xs" style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-card)', color: 'var(--color-foreground)' }}>
+                                <option value="P0">P0</option><option value="P1">P1</option><option value="P2">P2</option><option value="P3">P3</option><option value="P4">P4</option>
                               </select>
-                              <select value={prio?.deadlineDays || 7}
-                                onChange={e => setDeadline(test, Number(e.target.value), 'P3')}
-                                className="px-2 py-1 rounded border text-xs"
-                                style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-card)', color: 'var(--color-foreground)' }}>
-                                <option value={3}>3 дн</option>
-                                <option value={7}>7 дн</option>
-                                <option value={14}>14 дн</option>
-                                <option value={30}>30 дн</option>
+                              <select value={prio?.deadlineDays || 7} onChange={e => setDeadline(test, Number(e.target.value), 'P3')}
+                                className="px-2 py-1 rounded border text-xs" style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-card)', color: 'var(--color-foreground)' }}>
+                                <option value={3}>3 дн</option><option value={7}>7 дн</option><option value={14}>14 дн</option><option value={30}>30 дн</option>
                               </select>
-                              <button onClick={() => toggleExaminationItem('labTests', test)}
-                                className="p-0.5 rounded hover:bg-muted" style={{ color: 'var(--color-muted-foreground)' }}>
-                                <X size={12} />
-                              </button>
+                              <button onClick={() => toggleExaminationItem('labTests', test)} className="p-0.5 rounded hover:bg-muted" style={{ color: 'var(--color-muted-foreground)' }}><X size={12} /></button>
                             </div>
                           );
                         })}
@@ -854,11 +907,10 @@ useEffect(() => {
                   </div>
 
                   <div>
-                    <h4 className="text-xs font-semibold mb-1.5" style={{ color: 'var(--color-foreground)' }}>б) Инструментальные</h4>
+                    <h4 className="text-xs font-semibold mb-1.5" style={{ color: 'var(--color-foreground)' }}>Инструментальные</h4>
                     <div className="flex flex-wrap gap-1.5 mb-2">
                       {COMMON_INSTRUMENTAL.map(test => (
-                        <Chip key={test} label={test}
-                          active={currentVisit.examinationPlan.instrumental.includes(test)}
+                        <Chip key={test} label={test} active={currentVisit.examinationPlan.instrumental.includes(test)}
                           onClick={() => toggleExaminationItem('instrumental', test)} />
                       ))}
                     </div>
@@ -870,29 +922,15 @@ useEffect(() => {
                             <div key={test} className="flex items-center gap-2 px-3 py-1.5 rounded-lg border text-xs"
                               style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-background)' }}>
                               <span className="flex-1 font-medium" style={{ color: 'var(--color-foreground)' }}>{test}</span>
-                              <select value={prio?.priority || 'P2'}
-                                onChange={e => setPriority(test, e.target.value, prio?.deadlineDays || 14)}
-                                className="px-2 py-1 rounded border text-xs"
-                                style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-card)', color: 'var(--color-foreground)' }}>
-                                <option value="P0">P0</option>
-                                <option value="P1">P1</option>
-                                <option value="P2">P2</option>
-                                <option value="P3">P3</option>
-                                <option value="P4">P4</option>
+                              <select value={prio?.priority || 'P2'} onChange={e => setPriority(test, e.target.value, prio?.deadlineDays || 14)}
+                                className="px-2 py-1 rounded border text-xs" style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-card)', color: 'var(--color-foreground)' }}>
+                                <option value="P0">P0</option><option value="P1">P1</option><option value="P2">P2</option><option value="P3">P3</option><option value="P4">P4</option>
                               </select>
-                              <select value={prio?.deadlineDays || 14}
-                                onChange={e => setDeadline(test, Number(e.target.value), 'P2')}
-                                className="px-2 py-1 rounded border text-xs"
-                                style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-card)', color: 'var(--color-foreground)' }}>
-                                <option value={7}>7 дн</option>
-                                <option value={14}>14 дн</option>
-                                <option value={30}>30 дн</option>
-                                <option value={60}>60 дн</option>
+                              <select value={prio?.deadlineDays || 14} onChange={e => setDeadline(test, Number(e.target.value), 'P2')}
+                                className="px-2 py-1 rounded border text-xs" style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-card)', color: 'var(--color-foreground)' }}>
+                                <option value={7}>7 дн</option><option value={14}>14 дн</option><option value={30}>30 дн</option><option value={60}>60 дн</option>
                               </select>
-                              <button onClick={() => toggleExaminationItem('instrumental', test)}
-                                className="p-0.5 rounded hover:bg-muted" style={{ color: 'var(--color-muted-foreground)' }}>
-                                <X size={12} />
-                              </button>
+                              <button onClick={() => toggleExaminationItem('instrumental', test)} className="p-0.5 rounded hover:bg-muted" style={{ color: 'var(--color-muted-foreground)' }}><X size={12} /></button>
                             </div>
                           );
                         })}
@@ -910,11 +948,10 @@ useEffect(() => {
                   </div>
 
                   <div>
-                    <h4 className="text-xs font-semibold mb-1.5" style={{ color: 'var(--color-foreground)' }}>в) Консультации</h4>
+                    <h4 className="text-xs font-semibold mb-1.5" style={{ color: 'var(--color-foreground)' }}>Консультации</h4>
                     <div className="flex flex-wrap gap-1.5 mb-2">
                       {COMMON_CONSULTATIONS.map(cons => (
-                        <Chip key={cons} label={cons}
-                          active={currentVisit.examinationPlan.consultations.includes(cons)}
+                        <Chip key={cons} label={cons} active={currentVisit.examinationPlan.consultations.includes(cons)}
                           onClick={() => toggleExaminationItem('consultations', cons)} />
                       ))}
                     </div>
@@ -926,29 +963,15 @@ useEffect(() => {
                             <div key={cons} className="flex items-center gap-2 px-3 py-1.5 rounded-lg border text-xs"
                               style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-background)' }}>
                               <span className="flex-1 font-medium" style={{ color: 'var(--color-foreground)' }}>{cons}</span>
-                              <select value={prio?.priority || 'P2'}
-                                onChange={e => setPriority(cons, e.target.value, prio?.deadlineDays || 30)}
-                                className="px-2 py-1 rounded border text-xs"
-                                style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-card)', color: 'var(--color-foreground)' }}>
-                                <option value="P0">P0</option>
-                                <option value="P1">P1</option>
-                                <option value="P2">P2</option>
-                                <option value="P3">P3</option>
-                                <option value="P4">P4</option>
+                              <select value={prio?.priority || 'P2'} onChange={e => setPriority(cons, e.target.value, prio?.deadlineDays || 30)}
+                                className="px-2 py-1 rounded border text-xs" style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-card)', color: 'var(--color-foreground)' }}>
+                                <option value="P0">P0</option><option value="P1">P1</option><option value="P2">P2</option><option value="P3">P3</option><option value="P4">P4</option>
                               </select>
-                              <select value={prio?.deadlineDays || 30}
-                                onChange={e => setDeadline(cons, Number(e.target.value), 'P2')}
-                                className="px-2 py-1 rounded border text-xs"
-                                style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-card)', color: 'var(--color-foreground)' }}>
-                                <option value={14}>14 дн</option>
-                                <option value={30}>30 дн</option>
-                                <option value={60}>60 дн</option>
-                                <option value={90}>90 дн</option>
+                              <select value={prio?.deadlineDays || 30} onChange={e => setDeadline(cons, Number(e.target.value), 'P2')}
+                                className="px-2 py-1 rounded border text-xs" style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-card)', color: 'var(--color-foreground)' }}>
+                                <option value={14}>14 дн</option><option value={30}>30 дн</option><option value={60}>60 дн</option><option value={90}>90 дн</option>
                               </select>
-                              <button onClick={() => toggleExaminationItem('consultations', cons)}
-                                className="p-0.5 rounded hover:bg-muted" style={{ color: 'var(--color-muted-foreground)' }}>
-                                <X size={12} />
-                              </button>
+                              <button onClick={() => toggleExaminationItem('consultations', cons)} className="p-0.5 rounded hover:bg-muted" style={{ color: 'var(--color-muted-foreground)' }}><X size={12} /></button>
                             </div>
                           );
                         })}
@@ -969,10 +992,11 @@ useEffect(() => {
 
               {/* 8. Лечение */}
               <Section id="treatment" title="Лечение" icon="💊"
-                expanded={expandedSections.includes('treatment')} onToggle={() => toggleSection('treatment')}>
+                expanded={expandedSections.includes('treatment')} onToggle={() => toggleSection('treatment')}
+                highlight={validationErrors.includes('treatment')}>
                 <div className="space-y-4">
                   <div>
-                    <h4 className="text-xs font-semibold mb-1.5" style={{ color: 'var(--color-foreground)' }}>а) Немедикаментозное лечение</h4>
+                    <h4 className="text-xs font-semibold mb-1.5" style={{ color: 'var(--color-foreground)' }}>а) Немедикаментозное</h4>
                     <div className="flex flex-wrap gap-1.5 mb-2">
                       {COMMON_NON_DRUG_RECOMMENDATIONS.map(rec => (
                         <Chip key={rec.label} label={rec.label} active={currentVisit.treatment.nonDrug.includes(rec.label)}
@@ -982,40 +1006,99 @@ useEffect(() => {
                     {currentVisit.treatment.nonDrug.length > 0 && (
                       <div className="text-xs mb-2" style={{ color: 'var(--color-muted-foreground)' }}>Выбрано: {currentVisit.treatment.nonDrug.join(', ')}</div>
                     )}
-                    <div>
-                      <label className="text-xs font-medium mb-1 block" style={{ color: 'var(--color-muted-foreground)' }}>
-                        Текст рекомендаций <span className="ml-2 opacity-60">//код</span>
-                      </label>
-                      <textarea value={currentVisit.treatment.nonDrugText}
-                        onChange={e => updateTreatment({ nonDrugText: e.target.value })}
-                        onBlur={e => { if (hasSnippets(e.target.value)) updateTreatment({ nonDrugText: expandSnippet(e.target.value) }); }}
-                        placeholder="Диета с ограничением соли, дозированная ходьба..." rows={2}
-                        className="w-full px-3 py-2 rounded-lg border text-sm outline-none resize-none"
-                        style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-background)', color: 'var(--color-foreground)' }} />
-                    </div>
+                    <textarea value={currentVisit.treatment.nonDrugText}
+                      onChange={e => updateTreatment({ nonDrugText: e.target.value })}
+                      onBlur={e => { if (hasSnippets(e.target.value)) updateTreatment({ nonDrugText: expandSnippet(e.target.value) }); }}
+                      placeholder="Диета, режим, рекомендации..." rows={2}
+                      className="w-full px-3 py-2 rounded-lg border text-sm outline-none resize-none"
+                      style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-background)', color: 'var(--color-foreground)' }} />
                   </div>
                   <div>
-                    <h4 className="text-xs font-semibold mb-1.5" style={{ color: 'var(--color-foreground)' }}>б) Медикаментозное лечение</h4>
-                    {drugInteractions.length > 0 && showDrugAlerts && (
-                      <div className="mb-3">
-                        <DrugSafetyAlert interactions={drugInteractions} onDismiss={() => setShowDrugAlerts(false)} />
+                    <h4 className="text-xs font-semibold mb-1.5" style={{ color: 'var(--color-foreground)' }}>б) Медикаментозное</h4>
+
+                    {/* Тактика */}
+                    <div className="p-3 rounded-lg border mb-3" style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-background)' }}>
+                      <div className="flex items-center justify-between mb-2">
+                        <h4 className="text-xs font-semibold" style={{ color: 'var(--color-foreground)' }}>Тактика лечения</h4>
+                        <span className="text-xs px-2 py-0.5 rounded" style={{
+                          backgroundColor: currentVisit.treatment.tactic === 'aggressive' ? '#fee2e2' : currentVisit.treatment.tactic === 'safe' ? '#dcfce7' : '#f3f4f6',
+                          color: currentVisit.treatment.tactic === 'aggressive' ? '#991b1b' : currentVisit.treatment.tactic === 'safe' ? '#166534' : '#6b7280',
+                        }}>
+                          {currentVisit.treatment.tactic === 'aggressive' ? '⚠️ Агрессивная' : currentVisit.treatment.tactic === 'safe' ? '🛡️ Безопасная' : '⚖️ Умеренная'}
+                        </span>
+                      </div>
+                      <div className="flex gap-2 mb-2">
+                        {(['aggressive', 'moderate', 'safe'] as const).map(t => (
+                          <button key={t} onClick={() => updateTreatment({ tactic: t })}
+                            className="px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors"
+                            style={{
+                              borderColor: currentVisit.treatment.tactic === t ? 'var(--color-primary)' : 'var(--color-border)',
+                              backgroundColor: currentVisit.treatment.tactic === t ? 'var(--color-primary)' : 'transparent',
+                              color: currentVisit.treatment.tactic === t ? 'var(--color-primary-foreground)' : 'var(--color-foreground)',
+                            }}>{t === 'aggressive' ? 'Агрессивная' : t === 'moderate' ? 'Умеренная' : 'Безопасная'}</button>
+                        ))}
+                      </div>
+                      <textarea value={currentVisit.treatment.tacticRationale || ''}
+                        onChange={e => updateTreatment({ tacticRationale: e.target.value })}
+                        placeholder="Обоснование тактики..."
+                        rows={2} className="w-full px-3 py-2 rounded-lg border text-xs outline-none resize-none"
+                        style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-card)', color: 'var(--color-foreground)' }} />
+                    </div>
+
+                    {/* Биопсихосоциальный профиль */}
+                    <div className="mb-3">
+                      <button onClick={() => setShowBiopsychosocial(true)}
+                        className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs border"
+                        style={{ borderColor: '#8b5cf6', color: '#8b5cf6' }}>
+                        <Activity size={14} /> Биопсихосоциальный профиль
+                      </button>
+                    </div>
+
+                    {/* Полипрагмазия */}
+                    {currentVisit.treatment.medications.length >= 5 && (
+                      <div className="p-2 rounded-lg mb-3 text-xs" style={{ backgroundColor: '#fef3c7', color: '#92400e' }}>
+                        ⚠️ Полипрагмазия: {currentVisit.treatment.medications.length} препаратов.
                       </div>
                     )}
+
+                    {/* STOPP */}
+                    {stoppAlerts.length > 0 && (
+                      <div className="p-2 rounded-lg border mb-3 text-xs" style={{ borderColor: '#ef4444', backgroundColor: '#fef2f2', color: '#991b1b' }}>
+                        <div className="font-medium mb-1">⚠️ STOPP-критерии (пациент ≥65 лет)</div>
+                        {stoppAlerts.map((rule: any) => (
+                          <div key={rule.id} className="mb-1">• {rule.description}: {rule.recommendation}</div>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* Лекарственные взаимодействия */}
+                    {drugInteractions.length > 0 && showDrugAlerts && (
+                      <div className="mb-3"><DrugSafetyAlert interactions={drugInteractions} onDismiss={() => setShowDrugAlerts(false)} /></div>
+                    )}
+
+                    {/* Список препаратов */}
                     {currentVisit.treatment.medications.length > 0 && (
                       <div className="space-y-2 mb-3">
                         {currentVisit.treatment.medications.map(med => (
                           <MedicationRow key={med.id} med={med}
                             onRemove={() => removeMedication(med.id)}
-                            onEdit={() => handleEditMed(med)} />
+                            onEdit={() => handleEditMed(med)}
+                            onDeprescribe={() => handleDeprescribe(med)} />
                         ))}
                       </div>
                     )}
+
                     <div className="flex gap-2 mb-3 flex-wrap">
                       <button onClick={() => setShowMedicationSearch(true)}
                         className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium"
                         style={{ backgroundColor: 'var(--color-primary)', color: 'var(--color-primary-foreground)' }}>
                         <Search size={14} /> Найти препарат
                       </button>
+                      <button onClick={() => setShowSymptomHelper(true)}
+  className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs border"
+  style={{ borderColor: '#8b5cf6', color: '#8b5cf6' }}>
+  💡 Симптом-помощник
+</button>
                       <button onClick={() => { setEditingMed(null); setNewMed({ name: '', dose: '', frequency: '', duration: '30 дней', isBasic: false }); setShowAddMed(true); }}
                         className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs border"
                         style={{ borderColor: 'var(--color-border)', color: 'var(--color-muted-foreground)' }}>
@@ -1029,48 +1112,28 @@ useEffect(() => {
                         </button>
                       )}
                     </div>
+
                     {showAddMed && (
                       <div className="p-3 rounded-lg border space-y-2" style={{ borderColor: 'var(--color-border)' }}>
                         <label className="flex items-center gap-2 text-sm" style={{ color: 'var(--color-foreground)' }}>
-                          <input type="checkbox"
-                            checked={editingMed ? editingMed.isBasic : newMed.isBasic}
-                            onChange={e => editingMed
-                              ? setEditingMed({ ...editingMed, isBasic: e.target.checked })
-                              : setNewMed(p => ({ ...p, isBasic: e.target.checked }))} />
+                          <input type="checkbox" checked={editingMed ? editingMed.isBasic : newMed.isBasic}
+                            onChange={e => editingMed ? setEditingMed({ ...editingMed, isBasic: e.target.checked }) : setNewMed(p => ({ ...p, isBasic: e.target.checked }))} />
                           Базисная терапия
                         </label>
                         <div className="grid grid-cols-2 gap-2">
-                          <Input label="Препарат"
-                            value={editingMed ? editingMed.name : newMed.name}
-                            onChange={v => editingMed
-                              ? setEditingMed({ ...editingMed, name: v })
-                              : setNewMed(p => ({ ...p, name: v }))}
-                            placeholder="Лизиноприл" />
-                          <Input label="Доза"
-                            value={editingMed ? editingMed.dose : newMed.dose}
-                            onChange={v => editingMed
-                              ? setEditingMed({ ...editingMed, dose: v })
-                              : setNewMed(p => ({ ...p, dose: v }))}
-                            placeholder="10 мг" />
-                          <Input label="Кратность"
-                            value={editingMed ? editingMed.frequency : newMed.frequency}
-                            onChange={v => editingMed
-                              ? setEditingMed({ ...editingMed, frequency: v })
-                              : setNewMed(p => ({ ...p, frequency: v }))}
-                            placeholder="1 раз в день" />
-                          <Input label="Длительность"
-                            value={editingMed ? editingMed.duration : newMed.duration}
-                            onChange={v => editingMed
-                              ? setEditingMed({ ...editingMed, duration: v })
-                              : setNewMed(p => ({ ...p, duration: v }))}
-                            placeholder="30 дней" />
+                          <Input label="Препарат" value={editingMed ? editingMed.name : newMed.name}
+                            onChange={v => editingMed ? setEditingMed({ ...editingMed, name: v }) : setNewMed(p => ({ ...p, name: v }))} placeholder="Лизиноприл" />
+                          <Input label="Доза" value={editingMed ? editingMed.dose : newMed.dose}
+                            onChange={v => editingMed ? setEditingMed({ ...editingMed, dose: v }) : setNewMed(p => ({ ...p, dose: v }))} placeholder="10 мг" />
+                          <Input label="Кратность" value={editingMed ? editingMed.frequency : newMed.frequency}
+                            onChange={v => editingMed ? setEditingMed({ ...editingMed, frequency: v }) : setNewMed(p => ({ ...p, frequency: v }))} placeholder="1 раз в день" />
+                          <Input label="Длительность" value={editingMed ? editingMed.duration : newMed.duration}
+                            onChange={v => editingMed ? setEditingMed({ ...editingMed, duration: v }) : setNewMed(p => ({ ...p, duration: v }))} placeholder="30 дней" />
                         </div>
                         <div className="flex gap-2">
                           <button onClick={handleSaveMed}
                             className="px-3 py-1.5 rounded-lg text-xs font-medium"
-                            style={{ backgroundColor: 'var(--color-primary)', color: 'var(--color-primary-foreground)' }}>
-                            ✓ {editingMed ? 'Сохранить' : 'Добавить'}
-                          </button>
+                            style={{ backgroundColor: 'var(--color-primary)', color: 'var(--color-primary-foreground)' }}>✓ {editingMed ? 'Сохранить' : 'Добавить'}</button>
                           <button onClick={() => { setShowAddMed(false); setEditingMed(null); }}
                             className="px-3 py-1.5 rounded-lg text-xs border"
                             style={{ borderColor: 'var(--color-border)', color: 'var(--color-foreground)' }}>Отмена</button>
@@ -1087,30 +1150,20 @@ useEffect(() => {
                 <div className="space-y-3">
                   <div className="flex gap-2">
                     {[
-                      { label: 'Через 1 месяц', days: 30 },
-                      { label: 'Через 3 месяца', days: 90 },
-                      { label: 'Через 6 месяцев', days: 180 },
-                      { label: 'Через 1 год', days: 365 },
+                      { label: 'Через 1 месяц', days: 30 }, { label: 'Через 3 месяца', days: 90 },
+                      { label: 'Через 6 месяцев', days: 180 }, { label: 'Через 1 год', days: 365 },
                     ].map(opt => (
                       <Chip key={opt.label} label={opt.label} active={false}
-                        onClick={() => {
-                          const d = new Date(currentVisit.date);
-                          d.setDate(d.getDate() + opt.days);
-                          updateFollowUp({ date: d.toISOString().split('T')[0] });
-                        }} />
+                        onClick={() => { const d = new Date(currentVisit.date); d.setDate(d.getDate() + opt.days); updateFollowUp({ date: d.toISOString().split('T')[0] }); }} />
                     ))}
                   </div>
-                  <Input label="Дата явки" value={currentVisit.followUp.date}
-                    onChange={v => updateFollowUp({ date: v })} type="date" />
-                  <Input label="Причина явки" value={currentVisit.followUp.reason}
-                    onChange={v => updateFollowUp({ reason: v })} placeholder="Контроль АД, оценка терапии" />
+                  <Input label="Дата явки" value={currentVisit.followUp.date} onChange={v => updateFollowUp({ date: v })} type="date" />
+                  <Input label="Причина явки" value={currentVisit.followUp.reason} onChange={v => updateFollowUp({ reason: v })} placeholder="Контроль АД" />
                 </div>
               </Section>
 
               {/* Модальные окна */}
-              <ICD10SearchModal
-                isOpen={showICD10Search}
-                onClose={() => setShowICD10Search(false)}
+              <ICD10SearchModal isOpen={showICD10Search} onClose={() => setShowICD10Search(false)}
                 onSelect={(code, name) => {
                   switch (icd10Target) {
                     case 'primary': updatePrimaryDiagnosis({ code, name }); break;
@@ -1120,16 +1173,9 @@ useEffect(() => {
                   }
                   setShowICD10Search(false);
                 }}
-                title={
-                  icd10Target === 'primary' ? 'Поиск основного диагноза' :
-                  icd10Target === 'complications' ? 'Поиск осложнения' :
-                  icd10Target === 'concomitant' ? 'Поиск сопутствующего' : 'Поиск фонового'
-                }
-              />
+                title={icd10Target === 'primary' ? 'Поиск основного диагноза' : icd10Target === 'complications' ? 'Поиск осложнения' : icd10Target === 'concomitant' ? 'Поиск сопутствующего' : 'Поиск фонового'} />
 
-              <FormulationSelectModal
-                isOpen={showFormulationModal}
-                onClose={() => setShowFormulationModal(false)}
+              <FormulationSelectModal isOpen={showFormulationModal} onClose={() => setShowFormulationModal(false)}
                 onSelect={(text) => {
                   switch (formulationTarget.type) {
                     case 'primary': updatePrimaryDiagnosis({ name: text }); break;
@@ -1139,22 +1185,58 @@ useEffect(() => {
                   }
                   setShowFormulationModal(false);
                 }}
-                icd10Code={getFormulationCode()}
-              />
+                icd10Code={getFormulationCode()} />
 
-              <MedicationSearchModal
-                isOpen={showMedicationSearch}
-                onClose={() => setShowMedicationSearch(false)}
+              <MedicationSearchModal isOpen={showMedicationSearch} onClose={() => setShowMedicationSearch(false)}
                 onSelect={(inn, dosage, frequency, isBasic) => {
-                  addMedication({ name: inn, dose: dosage, frequency: frequency, duration: '30 дней', isBasic: isBasic });
+                  addMedication({ name: inn, dose: dosage, frequency, duration: '30 дней', isBasic });
                   setShowMedicationSearch(false);
-                }}
-              />
+                }} />
 
-              <ProtocolGenerator
-                isOpen={showProtocolGenerator}
-                onClose={() => setShowProtocolGenerator(false)}
-              />
+              <BiopsychosocialModal isOpen={showBiopsychosocial} onClose={() => setShowBiopsychosocial(false)} />
+
+                <SymptomHelperModal
+  isOpen={showSymptomHelper}
+  onClose={() => setShowSymptomHelper(false)}
+  onAddMedication={(name, dose, frequency) => {
+    addMedication({ name, dose, frequency, duration: '7 дней', isBasic: false });
+  }}
+  onAddNonDrug={(text) => {
+    const current = currentVisit.treatment.nonDrugText;
+    updateTreatment({ nonDrugText: current ? current + '\n' + text : text });
+  }}
+/>
+
+              <ProtocolGenerator isOpen={showProtocolGenerator} onClose={() => setShowProtocolGenerator(false)} />
+
+              {/* Модалка депрескрайбинга */}
+              {deprescribeTarget && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setDeprescribeTarget(null)}>
+                  <div className="w-96 rounded-xl shadow-2xl p-4" style={{ backgroundColor: 'var(--color-card)' }} onClick={e => e.stopPropagation()}>
+                    <h3 className="text-sm font-semibold mb-3" style={{ color: 'var(--color-foreground)' }}>Депрескрайбинг: {deprescribeTarget.name}</h3>
+                    <label className="block text-xs mb-1" style={{ color: 'var(--color-muted-foreground)' }}>Причина отмены</label>
+                    <select value={deprescribeReason} onChange={e => setDeprescribeReason(e.target.value)}
+                      className="w-full px-3 py-2 rounded-lg border text-sm mb-2"
+                      style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-background)', color: 'var(--color-foreground)' }}>
+                      <option value="">Выберите причину</option>
+                      <option value="Побочные эффекты">Побочные эффекты</option>
+                      <option value="Неэффективность">Неэффективность</option>
+                      <option value="Дублирование терапии">Дублирование терапии</option>
+                      <option value="Противопоказание (СТОПП)">Противопоказание (СТОПП)</option>
+                      <option value="Решение пациента">Решение пациента</option>
+                      <option value="Замена на другой препарат">Замена на другой препарат</option>
+                    </select>
+                    <input type="text" value={deprescribeReason} onChange={e => setDeprescribeReason(e.target.value)}
+                      placeholder="Или впишите свою причину..."
+                      className="w-full px-3 py-2 rounded-lg border text-sm mb-3"
+                      style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-background)', color: 'var(--color-foreground)' }} />
+                    <div className="flex gap-2">
+                      <button onClick={confirmDeprescribe} className="px-4 py-2 rounded-lg text-sm font-medium" style={{ backgroundColor: '#ef4444', color: 'white' }}>Отменить препарат</button>
+                      <button onClick={() => setDeprescribeTarget(null)} className="px-4 py-2 rounded-lg text-sm border" style={{ borderColor: 'var(--color-border)', color: 'var(--color-foreground)' }}>Отмена</button>
+                    </div>
+                  </div>
+                </div>
+              )}
             </>
           )}
         </div>

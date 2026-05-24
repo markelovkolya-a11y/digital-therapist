@@ -1,5 +1,5 @@
 // core/store/slices/visitSlice.ts
-// v2.1.0 — Приоритеты в ExaminationPlan, без (get() as any)
+// v2.2.0 — Биопсихосоциальный профиль + приоритеты
 
 import { StateCreator } from 'zustand';
 import { AppStore, VisitSlice } from '../types';
@@ -58,6 +58,8 @@ const DEFAULT_TREATMENT: TreatmentState = {
   nonDrugText: '',
   medications: [],
   basicTherapy: [],
+  tactic: 'moderate',
+  tacticRationale: '',
 };
 
 const DEFAULT_FOLLOW_UP: FollowUpState = { date: '', reason: '' };
@@ -188,6 +190,13 @@ export const createVisitSlice: StateCreator<AppStore, [], [], VisitSlice> = (set
       } catch {}
     }
 
+    // Загружаем биопсихосоциальный профиль
+    let biopsychosocialProfile = null;
+    try {
+      const { biopsychosocialService } = await import('@core/services/biopsychosocial.service');
+      biopsychosocialProfile = await biopsychosocialService.getLatest(patientId);
+    } catch {}
+
     set({
       currentVisit: {
         patientId,
@@ -212,6 +221,7 @@ export const createVisitSlice: StateCreator<AppStore, [], [], VisitSlice> = (set
           nonDrug: [],
         },
         followUp: { ...DEFAULT_FOLLOW_UP },
+        biopsychosocialProfile,
       },
     });
   },
@@ -538,7 +548,6 @@ export const createVisitSlice: StateCreator<AppStore, [], [], VisitSlice> = (set
 
     await eventRepo.createBatch(events);
 
-    // Создаём записи в листе ожидания
     const priorities = visit.examinationPlan.priorities || {};
 
     for (const test of visit.examinationPlan.labTests) {

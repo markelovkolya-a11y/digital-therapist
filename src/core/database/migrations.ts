@@ -62,6 +62,16 @@ async function migrateV1(db: any): Promise<void> {
     )
   `);
 
+    await db.execute(`
+    CREATE TABLE IF NOT EXISTS symptom_guides (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL UNIQUE,
+      non_drug TEXT NOT NULL DEFAULT '[]',
+      medications TEXT NOT NULL DEFAULT '[]',
+      created_at TEXT NOT NULL
+    )
+  `);
+
   // Пациенты
   await db.execute(`
     CREATE TABLE IF NOT EXISTS patients (

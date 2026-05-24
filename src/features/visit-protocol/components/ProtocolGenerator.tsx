@@ -136,6 +136,73 @@ export function ProtocolGenerator({ isOpen, onClose }: ProtocolGeneratorProps) {
       lines.push('');
     }
 
+        // Тактика лечения
+    const tactic = currentVisit.treatment.tactic || 'moderate';
+    const tacticLabels: Record<string, string> = {
+      aggressive: 'Агрессивная',
+      moderate: 'Умеренная',
+      safe: 'Безопасная',
+    };
+    lines.push(`ТАКТИКА ЛЕЧЕНИЯ: ${tacticLabels[tactic]}`);
+    if (currentVisit.treatment.tacticRationale) {
+      lines.push(`Обоснование: ${currentVisit.treatment.tacticRationale}`);
+    }
+    lines.push('');
+
+        // Биопсихосоциальный профиль
+    const profile = currentVisit.biopsychosocialProfile;
+    if (profile) {
+      const hasData = profile.barthelScore < 100 || profile.phq2Score >= 1 || 
+        profile.gad2Score >= 1 || profile.housing !== 'adequate' || 
+        profile.socialIsolation !== 'none';
+      
+      if (hasData) {
+        lines.push('БИОПСИХОСОЦИАЛЬНЫЙ ПРОФИЛЬ:');
+        
+        if (profile.barthelScore < 100) {
+          const barthelLabel = profile.barthelScore >= 80 ? 'независим' : 
+            profile.barthelScore >= 50 ? 'нуждается в помощи' : 'зависим';
+          lines.push(`- Шкала Бартел: ${profile.barthelScore}/100 (${barthelLabel})`);
+          if (profile.barthelScore < 60) {
+            lines.push('  Рекомендация: социальный работник, патронаж');
+          }
+        }
+        
+        if (profile.phq2Score >= 1) {
+          lines.push(`- PHQ-2 (депрессия): ${profile.phq2Score}/2 — ${
+            profile.phq2Score >= 2 ? 'высокий риск, рекомендована консультация психиатра' : 'умеренный риск'
+          }`);
+        }
+        
+        if (profile.gad2Score >= 1) {
+          lines.push(`- GAD-2 (тревога): ${profile.gad2Score}/2 — ${
+            profile.gad2Score >= 2 ? 'высокий риск, рекомендована консультация' : 'умеренный риск'
+          }`);
+        }
+        
+        if (profile.housing !== 'adequate') {
+          const housingLabels: Record<string, string> = {
+            crowded: 'стеснённое', unsafe: 'аварийное', homeless: 'без жилья',
+          };
+          lines.push(`- Жилищные условия: ${housingLabels[profile.housing] || profile.housing}`);
+        }
+        
+        if (profile.socialIsolation !== 'none') {
+          lines.push(`- Социальная изоляция: ${profile.socialIsolation === 'severe' ? 'выраженная' : 'умеренная'} — риск несоблюдения терапии`);
+        }
+        
+        if (profile.income === 'below_poverty') {
+          lines.push('- Доход ниже прожиточного минимума — рассмотреть льготное обеспечение');
+        }
+        
+        if (profile.summary) {
+          lines.push(`- Резюме врача: ${profile.summary}`);
+        }
+        
+        lines.push('');
+      }
+    }
+
     // Контрольная явка
     if (currentVisit.followUp.date) {
       lines.push(`КОНТРОЛЬНАЯ ЯВКА: ${formatDateRu(currentVisit.followUp.date)}`);

@@ -10,8 +10,9 @@ import { MedicationEditor } from './MedicationEditor';
 import { ComplaintEditor } from './ComplaintEditor';
 import { facilitiesRepo } from '@core/database/repositories/facilities.repo';
 import { Facility } from '@core/types/facilities';
+import { SymptomGuideEditor } from './SymptomGuideEditor';
 
-type SettingsTab = 'profile' | 'complaints' | 'formulations' | 'medications' | 'snippets' | 'facilities' | 'export';
+type SettingsTab = 'profile' | 'complaints' | 'formulations' | 'medications' | 'snippets' | 'facilities' | 'symptomGuides' | 'export';
 
 export function SettingsScreen() {
   const [activeTab, setActiveTab] = useState<SettingsTab>('profile');
@@ -23,6 +24,7 @@ export function SettingsScreen() {
     { id: 'medications', label: 'Лекарственные препараты', icon: <Pill size={16} /> },
     { id: 'snippets', label: 'Шаблоны текста', icon: <BookOpen size={16} /> },
     { id: 'facilities', label: 'Места проведения', icon: <MapPin size={16} /> },
+    { id: 'symptomGuides', label: 'Симптом-помощник', icon: <Stethoscope size={16} /> },
     { id: 'export', label: 'Импорт / Экспорт', icon: <Download size={16} /> },
   ];
 
@@ -48,6 +50,7 @@ export function SettingsScreen() {
         {activeTab === 'medications' && <MedicationEditor />}
         {activeTab === 'snippets' && <SnippetEditor />}
         {activeTab === 'facilities' && <FacilityEditor />}
+        {activeTab === 'symptomGuides' && <SymptomGuideEditor />}
         {activeTab === 'export' && <ExportSection />}
       </div>
     </div>
