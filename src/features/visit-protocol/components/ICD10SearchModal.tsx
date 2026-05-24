@@ -83,7 +83,7 @@ export function ICD10SearchModal({ isOpen, onClose, onSelect, title = 'Поис�
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center pt-20 bg-black/50" onClick={onClose}>
+    <div className="fixed inset-0 z-[60] flex items-start justify-center pt-20 bg-black/50" onClick={onClose}>
       <div
         className="w-full max-w-lg rounded-xl shadow-2xl overflow-hidden"
         style={{ backgroundColor: 'var(--color-card)' }}

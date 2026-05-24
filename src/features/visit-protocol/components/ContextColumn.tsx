@@ -1,5 +1,5 @@
 // features/visit-protocol/components/ContextColumn.tsx
-// v2.5.0 — Дневник проблем + шкалы CHA₂DS₂-VASc/HAS-BLED
+// v2.8.4 — Полный маппинг параметров, правильные дельты, tooltip без дублей
 
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useAppStore } from '@core/store';
@@ -9,17 +9,54 @@ import { getScreeningStatus, ScreeningItem } from '@core/services/screening.serv
 import { problemsRepo } from '@core/database/repositories/problems.repo';
 import { ClinicalEvent } from '@core/types/events';
 import { Problem } from '@core/types/problems';
-import { calculateAge, formatDateRu, isOverdue, todayString } from '@core/utils/date';
+import { calculateAge, formatDateRu, todayString } from '@core/utils/date';
 import { calculateBMI, calculateEGFR, getTargetBP, calculateCHA2DS2VASc, calculateHASBLED } from '@core/utils/medicalUtils';
-import { Calendar, Activity, Pill, AlertTriangle, ChevronRight, FlaskConical, Stethoscope, Calculator, Heart } from 'lucide-react';
+import { Calendar, AlertTriangle, FlaskConical, Stethoscope, Calculator, Heart, Pill, Activity } from 'lucide-react';
 import { ResultEntryModal } from '@/features/shared/ResultEntryModal';
 import { LabResultEntryModal } from '@/features/shared/LabResultEntryModal';
+
+// Полный маппинг технических ключей на русские названия
+const PARAM_LABELS: Record<string, string> = {
+  // Витальные
+  systolic_bp: 'САД', diastolic_bp: 'ДАД', heart_rate: 'ЧСС',
+  respiratory_rate: 'ЧДД', spo2: 'SpO₂', temperature: 't°',
+  height: 'Рост', weight: 'Вес', bmi: 'ИМТ',
+  // ОАК
+  hemoglobin: 'Hb', erythrocytes: 'Эритроциты', leukocytes: 'Лейкоциты',
+  platelets: 'Тромбоциты', esr: 'СОЭ', hematocrit: 'Гематокрит',
+  mcv: 'MCV', mch: 'MCH', neutrophils: 'Нейтрофилы',
+  lymphocytes: 'Лимфоциты', monocytes: 'Моноциты',
+  eosinophils: 'Эозинофилы', basophils: 'Базофилы',
+  // Биохимия
+  glucose: 'Глюкоза', creatinine: 'Креатинин', urea: 'Мочевина',
+  alt: 'АЛТ', ast: 'АСТ', total_bilirubin: 'Билирубин общ.',
+  total_protein: 'Общий белок', uric_acid: 'Мочевая кислота',
+  potassium: 'K⁺', sodium: 'Na⁺', chloride: 'Cl⁻',
+  // Липиды
+  total_cholesterol: 'ОХС', ldl: 'ЛПНП', hdl: 'ЛПВП',
+  triglycerides: 'Триглицериды', vldl: 'ЛПОНП',
+  // Коагулограмма
+  pt: 'ПВ', inr: 'МНО', aptt: 'АЧТВ', fibrinogen: 'Фибриноген',
+  d_dimer: 'D-димер',
+  // Гормоны
+  tsh: 'ТТГ',
+  // ОАМ
+  urine_protein: 'Белок', urine_glucose: 'Глюкоза',
+  urine_wbc: 'Лейкоциты', urine_rbc: 'Эритроциты',
+  // Специфичные
+  hba1c: 'HbA1c', glucose_fasting: 'Глюкоза натощак',
+  waist_circumference: 'Окружность талии',
+};
+
+function paramLabel(key: string): string {
+  return PARAM_LABELS[key] || key.replace(/_/g, ' ').replace(/^./, c => c.toUpperCase());
+}
 
 export function ContextColumn() {
   const currentVisit = useAppStore(s => s.currentVisit);
   const patients = useAppStore(s => s.patients);
   const updateExaminationPlan = useAppStore(s => s.updateExaminationPlan);
-  
+
   const [events, setEvents] = useState<ClinicalEvent[]>([]);
   const [screeningItems, setScreeningItems] = useState<ScreeningItem[]>([]);
   const [waitingItems, setWaitingItems] = useState<WaitingItemFull[]>([]);
@@ -27,12 +64,9 @@ export function ContextColumn() {
   const [loading, setLoading] = useState(true);
   const [labModal, setLabModal] = useState(false);
   const [instrumentalModal, setInstrumentalModal] = useState<{ isOpen: boolean; waitingItem?: WaitingItemFull }>({ isOpen: false });
-  const [toast, setToast] = useState<string | null>(null);
   const [addedToPlan, setAddedToPlan] = useState<Set<string>>(new Set());
-  const [showAddProblem, setShowAddProblem] = useState(false);
-  const [newProblemTitle, setNewProblemTitle] = useState('');
-  
   const needsReload = useRef(false);
+
   const selectedPatient = patients.find(p => p.id === currentVisit?.patientId);
 
   const loadData = useCallback(async () => {
@@ -40,14 +74,13 @@ export function ContextColumn() {
     setLoading(true);
     try {
       const [allEvents, waiting, problemsData] = await Promise.all([
-        eventRepo.findByPatient(currentVisit.patientId, 100),
+        eventRepo.findByPatient(currentVisit.patientId, 150),
         waitingService.getByPatient(currentVisit.patientId),
         problemsRepo.findActive(currentVisit.patientId),
       ]);
       setEvents(allEvents);
       setWaitingItems(waiting);
       setProblems(problemsData);
-
       if (selectedPatient) {
         setScreeningItems(getScreeningStatus(selectedPatient, allEvents));
       }
@@ -74,33 +107,33 @@ export function ContextColumn() {
     }
   }, [currentVisit?.status]);
 
-  const showToast = (msg: string) => {
-    setToast(msg);
-    setTimeout(() => setToast(null), 2000);
-  };
-
   const handleAddToPlan = (item: ScreeningItem) => {
     if (!currentVisit) return;
-    const category: 'instrumental' | 'labTests' = 
-      ['mammography', 'fluorography', 'colonoscopy'].includes(item.type) ? 'instrumental' : 'labTests';
+    const category: 'instrumental' | 'labTests' =
+      ['mammography', 'fluorography', 'colonoscopy'].includes(item.type)
+        ? 'instrumental' : 'labTests';
     const current = currentVisit.examinationPlan[category];
     if (!current.includes(item.name)) {
       updateExaminationPlan({ [category]: [...current, item.name] });
       setAddedToPlan(prev => new Set([...prev, item.id]));
-      showToast(`✅ ${item.name} добавлен в план`);
       setTimeout(() => {
-        setAddedToPlan(prev => { const next = new Set(prev); next.delete(item.id); return next; });
+        setAddedToPlan(prev => {
+          const next = new Set(prev);
+          next.delete(item.id);
+          return next;
+        });
       }, 2000);
     }
   };
 
   const handleAddResult = (item: WaitingItemFull) => {
     const desc = item.description.toLowerCase();
-    if (item.type === 'обследование' && (
-      desc.includes('анализ') || desc.includes('оак') || desc.includes('оам') ||
-      desc.includes('биохимия') || desc.includes('липид') || desc.includes('глюкоза') ||
-      desc.includes('hba1c') || desc.includes('холестерин')
-    )) {
+    if (
+      item.type === 'обследование' &&
+      (desc.includes('анализ') || desc.includes('оак') || desc.includes('оам') ||
+       desc.includes('биохимия') || desc.includes('липид') || desc.includes('глюкоза') ||
+       desc.includes('hba1c') || desc.includes('холестерин'))
+    ) {
       setLabModal(true);
     } else {
       setInstrumentalModal({ isOpen: true, waitingItem: item });
@@ -111,74 +144,91 @@ export function ContextColumn() {
     setLabModal(false);
     setInstrumentalModal({ isOpen: false });
     needsReload.current = true;
-    setTimeout(() => loadData(), 300);
-  };
-
-  const handleAddProblem = async () => {
-    if (!newProblemTitle.trim() || !currentVisit) return;
-    await problemsRepo.create({
-      patientId: currentVisit.patientId,
-      title: newProblemTitle.trim(),
-      status: 'active',
-      startedAt: todayString(),
-      resolvedAt: null,
-    });
-    setNewProblemTitle('');
-    setShowAddProblem(false);
-    const updated = await problemsRepo.findActive(currentVisit.patientId);
-    setProblems(updated);
+    setTimeout(() => loadData(), 500);
   };
 
   const handleResolveProblem = async (id: string) => {
     await problemsRepo.updateStatus(id, 'resolved');
     if (currentVisit) {
-      const updated = await problemsRepo.findActive(currentVisit.patientId);
-      setProblems(updated);
+      setProblems(await problemsRepo.findActive(currentVisit.patientId));
     }
   };
 
   if (!currentVisit || !selectedPatient) return null;
 
-  const groupedEvents = events.reduce((acc, event) => {
-    const date = event.timestamp;
-    if (!acc[date]) acc[date] = [];
-    acc[date].push(event);
-    return acc;
-  }, {} as Record<string, ClinicalEvent[]>);
+  // ====== ДАННЫЕ ======
 
-  const sortedDates = Object.keys(groupedEvents).sort((a, b) => b.localeCompare(a));
-  const activeDiagnoses = events.filter(e => e.type === 'diagnosis_established').slice(0, 5);
-  const lastVitals = events.filter(e => e.type === 'vital_signs').slice(0, 1);
-  const lastPrescriptions = events.filter(e => e.type === 'prescription').slice(0, 5);
+  // Активные диагнозы
+  const activeDiagnoses = events
+    .filter(e => e.type === 'diagnosis_established')
+    .slice(0, 5);
+
+  // Последние витальные (предыдущий визит, не текущий)
+  const previousVitals = events
+    .filter(e => e.type === 'vital_signs' && e.timestamp !== currentVisit.date)
+    .sort((a, b) => b.timestamp.localeCompare(a.timestamp))[0];
+
+  // Текущая терапия (уникальные препараты из последних назначений)
+  const lastPrescriptions = events
+    .filter(e => e.type === 'prescription')
+    .slice(0, 10);
+
+  const uniqueMeds = new Map<string, string>();
+  lastPrescriptions.forEach(p => {
+    const name = String(p.parameters.find(pr => pr.key === 'drug_name')?.value || '');
+    const dose = String(p.parameters.find(pr => pr.key === 'drug_dose')?.value || '');
+    if (name && !uniqueMeds.has(name)) {
+      uniqueMeds.set(name, dose);
+    }
+  });
+
+  // Последние результаты
   const lastResults = events
     .filter(e => ['lab_result', 'imaging_result', 'screening_performed'].includes(e.type))
     .slice(0, 5);
 
-  // Предиктивные шкалы
+  const resultSummary = lastResults.map(r => {
+    const name = String(r.parameters.find(p => p.key === 'report_name')?.value || r.title || '');
+    const conclusion = r.parameters.find(p => p.key === 'conclusion')?.value;
+    const allParams = r.parameters
+      .filter(p => !['report_name', 'conclusion', 'screening_type', 'performed_by'].includes(p.key))
+      .filter(p => p.value !== '' && p.value !== null && p.value !== undefined)
+      .map(p => `${paramLabel(p.key)}: ${p.value} ${p.unit || ''}`.trim());
+    const tooltip = [name, ...allParams, conclusion ? `Заключение: ${conclusion}` : '']
+      .filter(Boolean).join('\n');
+    return { name, date: r.timestamp, allParams: allParams.slice(0, 3), tooltip };
+  });
+
+  // ====== ПРЕДИКТИВНЫЕ ШКАЛЫ ======
+
   const bmi = (() => {
-    const height = currentVisit.vitals.height;
-    const weight = currentVisit.vitals.weight;
-    if (height > 0 && weight > 0) return calculateBMI(height, weight);
-    const anthroEvent = events.find(e => e.type === 'anthropometry');
-    if (anthroEvent) {
-      const h = Number(anthroEvent.parameters.find(p => p.key === 'height')?.value);
-      const w = Number(anthroEvent.parameters.find(p => p.key === 'weight')?.value);
-      if (h > 0 && w > 0) return calculateBMI(h, w);
+    const h = currentVisit.vitals.height;
+    const w = currentVisit.vitals.weight;
+    if (h > 0 && w > 0) return calculateBMI(h, w);
+    const anthro = events.find(e => e.type === 'anthropometry');
+    if (anthro) {
+      const ah = Number(anthro.parameters.find(p => p.key === 'height')?.value);
+      const aw = Number(anthro.parameters.find(p => p.key === 'weight')?.value);
+      if (ah > 0 && aw > 0) return calculateBMI(ah, aw);
     }
     return null;
   })();
 
   const egfr = (() => {
-    const creatinine = currentVisit.vitals.creatinine;
-    if (creatinine && creatinine > 0) {
-      return calculateEGFR(creatinine, calculateAge(selectedPatient.birthDate), selectedPatient.gender === 'female');
+    const cr = currentVisit.vitals.creatinine;
+    if (cr && cr > 0) {
+      return calculateEGFR(cr, calculateAge(selectedPatient.birthDate), selectedPatient.gender === 'female');
     }
-    const lastCreatinine = events
+    const lastCr = events
       .filter(e => e.type === 'lab_result')
       .flatMap(e => e.parameters)
       .find(p => p.key === 'creatinine' && p.value);
-    if (lastCreatinine) {
-      return calculateEGFR(Number(lastCreatinine.value), calculateAge(selectedPatient.birthDate), selectedPatient.gender === 'female');
+    if (lastCr) {
+      return calculateEGFR(
+        Number(lastCr.value),
+        calculateAge(selectedPatient.birthDate),
+        selectedPatient.gender === 'female'
+      );
     }
     return null;
   })();
@@ -188,43 +238,79 @@ export function ContextColumn() {
     .filter(Boolean);
   const targetBP = getTargetBP(icdCodes);
 
-  // Шкалы при ФП
-  const hasAtrialFibrillation = activeDiagnoses.some(d => {
-    const code = String(d.parameters.find(p => p.key === 'diagnosis_code')?.value || '');
-    return code.startsWith('I48');
-  });
+  const hasAF = activeDiagnoses.some(d =>
+    String(d.parameters.find(p => p.key === 'diagnosis_code')?.value || '').startsWith('I48')
+  );
 
-  const cha2ds2vasc = hasAtrialFibrillation ? calculateCHA2DS2VASc(
-    calculateAge(selectedPatient.birthDate),
-    selectedPatient.gender === 'female',
-    activeDiagnoses.some(d => String(d.parameters.find(p => p.key === 'diagnosis_code')?.value || '').startsWith('I50')),
-    activeDiagnoses.some(d => String(d.parameters.find(p => p.key === 'diagnosis_code')?.value || '').startsWith('I10') || String(d.parameters.find(p => p.key === 'diagnosis_code')?.value || '').startsWith('I11')),
-    activeDiagnoses.some(d => String(d.parameters.find(p => p.key === 'diagnosis_code')?.value || '').startsWith('E11')),
-    activeDiagnoses.some(d => String(d.parameters.find(p => p.key === 'diagnosis_code')?.value || '').startsWith('I63')),
-    activeDiagnoses.some(d => String(d.parameters.find(p => p.key === 'diagnosis_code')?.value || '').startsWith('I25') || String(d.parameters.find(p => p.key === 'diagnosis_code')?.value || '').startsWith('I20'))
-  ) : null;
+  const cha2ds2vasc = hasAF
+    ? calculateCHA2DS2VASc(
+        calculateAge(selectedPatient.birthDate),
+        selectedPatient.gender === 'female',
+        activeDiagnoses.some(d => String(d.parameters.find(p => p.key === 'diagnosis_code')?.value || '').startsWith('I50')),
+        activeDiagnoses.some(d => String(d.parameters.find(p => p.key === 'diagnosis_code')?.value || '').startsWith('I10') || String(d.parameters.find(p => p.key === 'diagnosis_code')?.value || '').startsWith('I11')),
+        activeDiagnoses.some(d => String(d.parameters.find(p => p.key === 'diagnosis_code')?.value || '').startsWith('E11')),
+        activeDiagnoses.some(d => String(d.parameters.find(p => p.key === 'diagnosis_code')?.value || '').startsWith('I63')),
+        activeDiagnoses.some(d => String(d.parameters.find(p => p.key === 'diagnosis_code')?.value || '').startsWith('I25') || String(d.parameters.find(p => p.key === 'diagnosis_code')?.value || '').startsWith('I20'))
+      )
+    : null;
 
-  const hasbled = hasAtrialFibrillation ? calculateHASBLED(
-    false, 0,
-    activeDiagnoses.some(d => String(d.parameters.find(p => p.key === 'diagnosis_code')?.value || '').startsWith('I63')),
-    false, false,
-    calculateAge(selectedPatient.birthDate) > 65,
-    false, false
-  ) : null;
+  const hasbled = hasAF
+    ? calculateHASBLED(
+        false, 0,
+        activeDiagnoses.some(d => String(d.parameters.find(p => p.key === 'diagnosis_code')?.value || '').startsWith('I63')),
+        false, false,
+        calculateAge(selectedPatient.birthDate) > 65,
+        false, false
+      )
+    : null;
 
-  const statusIcon = (status: string) => {
-    switch (status) { case 'red': return '🔴'; case 'yellow': return '🟡'; case 'green': return '🟢'; default: return '⬜'; }
+  // ====== ИСТОРИЯ ВИЗИТОВ ======
+
+  const visitDates = [...new Set(
+    events.filter(e => e.type === 'visit_note').map(e => e.timestamp)
+  )]
+    .sort((a, b) => b.localeCompare(a))
+    .slice(0, 8);
+
+  const getVisitTooltip = (date: string): string => {
+    const diag = events.find(e => e.type === 'diagnosis_established' && e.timestamp === date);
+    const complaints = events.find(e => e.type === 'symptom_reported' && e.timestamp === date);
+    const presc = events.filter(e => e.type === 'prescription' && e.timestamp === date);
+    const parts: string[] = [];
+    if (diag) {
+      const code = diag.parameters.find(p => p.key === 'diagnosis_code')?.value;
+      const name = diag.parameters.find(p => p.key === 'diagnosis_name')?.value || diag.title;
+      parts.push(`Диагноз: ${code} ${name}`);
+    }
+    if (complaints) {
+      try {
+        const c = JSON.parse(String(complaints.parameters.find(p => p.key === 'complaints_json')?.value || '[]'));
+        if (c.length > 0) parts.push('Жалобы: ' + c.map((x: any) => x.name).join(', '));
+      } catch {}
+    }
+    if (presc.length > 0) {
+      parts.push('Назначено: ' + presc.map(p => p.parameters.find(pr => pr.key === 'drug_name')?.value).filter(Boolean).join(', '));
+    }
+    return parts.join('\n');
+  };
+
+  const getDiagForDate = (date: string) =>
+    events.find(e => e.type === 'diagnosis_established' && e.timestamp === date);
+
+  // ====== РЕНДЕР ======
+
+  const statusIcon = (s: string) => {
+    switch (s) {
+      case 'red': return '🔴';
+      case 'yellow': return '🟡';
+      case 'green': return '🟢';
+      default: return '⬜';
+    }
   };
 
   return (
-    <div className="p-3 space-y-4 h-full overflow-y-auto text-xs" style={{ backgroundColor: 'var(--color-card)' }}>
-      {/* Toast */}
-      {toast && (
-        <div className="fixed bottom-4 right-4 z-50 px-3 py-2 rounded-lg shadow text-xs font-medium"
-          style={{ backgroundColor: '#dcfce7', color: '#166534' }}>{toast}</div>
-      )}
-
-      {/* Пациент */}
+    <div className="p-3 space-y-3 h-full overflow-y-auto text-xs" style={{ backgroundColor: 'var(--color-card)' }}>
+      {/* 1. Пациент */}
       <div className="pb-2 border-b" style={{ borderColor: 'var(--color-border)' }}>
         <div className="text-sm font-semibold" style={{ color: 'var(--color-foreground)' }}>
           {selectedPatient.lastName} {selectedPatient.firstName}
@@ -232,273 +318,254 @@ export function ContextColumn() {
         <div style={{ color: 'var(--color-muted-foreground)' }}>
           {calculateAge(selectedPatient.birthDate)} лет • {selectedPatient.gender === 'male' ? 'М' : 'Ж'}
         </div>
-        <div className="font-mono" style={{ color: 'var(--color-primary)', fontSize: '10px' }}>
-          {selectedPatient.emiasCode}
-        </div>
       </div>
 
-      {/* Расчётные показатели */}
-      {(bmi || egfr || icdCodes.length > 0) && (
+      {/* 2. Ключевые показатели */}
+      {(bmi || egfr || icdCodes.length > 0 || hasAF) && (
         <div className="pb-2 border-b" style={{ borderColor: 'var(--color-border)' }}>
-          <div className="flex items-center gap-1.5 mb-1.5">
-            <Calculator size={13} style={{ color: '#8b5cf6' }} />
-            <span className="font-semibold" style={{ color: 'var(--color-foreground)' }}>Расчётные показатели</span>
+          <div className="flex items-center gap-1.5 mb-1">
+            <Calculator size={12} style={{ color: '#8b5cf6' }} />
+            <span className="font-semibold" style={{ color: 'var(--color-foreground)' }}>Показатели</span>
           </div>
-          <div className="space-y-1">
+          <div className="space-y-0.5">
             {bmi && (
-              <div className="flex items-center gap-1">
-                <span style={{ color: bmi.color, fontSize: '8px' }}>●</span>
-                <span style={{ color: 'var(--color-foreground)' }}>ИМТ: {bmi.value} — {bmi.label}</span>
-              </div>
+              <div><span style={{ color: bmi.color }}>●</span> ИМТ {bmi.value} — {bmi.label}</div>
             )}
             {egfr && (
-              <div className="flex items-center gap-1">
-                <span style={{ color: egfr.color, fontSize: '8px' }}>●</span>
-                <span style={{ color: 'var(--color-foreground)' }}>СКФ: {egfr.value} мл/мин</span>
-                <div style={{ color: 'var(--color-muted-foreground)', fontSize: '10px' }}>{egfr.stage}</div>
-              </div>
+              <div><span style={{ color: egfr.color }}>●</span> СКФ {egfr.value} мл/мин ({egfr.stage})</div>
             )}
             {icdCodes.length > 0 && (
-              <div className="flex items-center gap-1">
-                <span style={{ color: '#3b82f6', fontSize: '8px' }}>●</span>
-                <span style={{ color: 'var(--color-foreground)' }}>{targetBP.label}</span>
-              </div>
+              <div><span style={{ color: '#3b82f6' }}>●</span> {targetBP.label}</div>
             )}
-          </div>
-        </div>
-      )}
-
-      {/* Шкалы при ФП */}
-      {hasAtrialFibrillation && (
-        <div className="pb-2 border-b" style={{ borderColor: 'var(--color-border)' }}>
-          <div className="flex items-center gap-1.5 mb-1.5">
-            <Heart size={13} style={{ color: '#ef4444' }} />
-            <span className="font-semibold" style={{ color: 'var(--color-foreground)' }}>Риски при ФП</span>
-          </div>
-          <div className="space-y-1">
             {cha2ds2vasc && (
-              <div>
-                <div className="flex items-center gap-1">
-                  <span style={{ color: cha2ds2vasc.color, fontSize: '8px' }}>●</span>
-                  <span style={{ color: 'var(--color-foreground)' }}>
-                    CHA₂DS₂-VASc: {cha2ds2vasc.score} б. — {cha2ds2vasc.risk} риск
-                  </span>
-                </div>
-                <div style={{ color: 'var(--color-muted-foreground)', fontSize: '10px' }}>{cha2ds2vasc.recommendation}</div>
+              <div title={`CHA₂DS₂-VASc: ${cha2ds2vasc.score} баллов\n${cha2ds2vasc.recommendation}`} className="cursor-help">
+                <span style={{ color: cha2ds2vasc.color }}>●</span> CHA₂DS₂-VASc {cha2ds2vasc.score} б. — {cha2ds2vasc.risk}
               </div>
             )}
             {hasbled && (
-              <div className="flex items-center gap-1">
-                <span style={{ color: hasbled.color, fontSize: '8px' }}>●</span>
-                <span style={{ color: 'var(--color-foreground)' }}>
-                  HAS-BLED: {hasbled.score} б. — {hasbled.risk}
-                </span>
-              </div>
+              <div><span style={{ color: hasbled.color }}>●</span> HAS-BLED {hasbled.score} б. — {hasbled.risk}</div>
             )}
           </div>
         </div>
       )}
 
-      {/* Диспансерный компас */}
-      {screeningItems.length > 0 && (
+      {/* 3. Требует внимания */}
+      {(screeningItems.filter(s => s.action !== 'none').length > 0 || waitingItems.length > 0 || problems.length > 0) && (
         <div className="pb-2 border-b" style={{ borderColor: 'var(--color-border)' }}>
-          <div className="flex items-center gap-1.5 mb-1.5">
-            <Stethoscope size={13} style={{ color: '#3b82f6' }} />
-            <span className="font-semibold" style={{ color: 'var(--color-foreground)' }}>Диспансерный компас</span>
+          <div className="flex items-center gap-1.5 mb-1">
+            <AlertTriangle size={12} style={{ color: '#ef4444' }} />
+            <span className="font-semibold" style={{ color: 'var(--color-foreground)' }}>Внимание</span>
+            <span className="ml-auto text-xs px-1.5 py-0.5 rounded-full" style={{ backgroundColor: 'var(--color-muted)' }}>
+              {screeningItems.filter(s => s.action !== 'none').length + waitingItems.length + problems.length}
+            </span>
           </div>
           <div className="space-y-1">
-            {screeningItems.map(item => (
-              <div key={item.id} className="flex items-start gap-1.5">
+            {screeningItems.filter(s => s.action !== 'none').slice(0, 2).map(item => (
+              <div key={item.id} className="flex items-center gap-1">
                 <span>{statusIcon(item.status)}</span>
-                <div className="flex-1 min-w-0">
-                  <div style={{ color: 'var(--color-foreground)' }}>{item.name}</div>
-                  {item.lastPerformed && (
-                    <div style={{ color: 'var(--color-muted-foreground)', fontSize: '10px' }}>{formatDateRu(item.lastPerformed)}</div>
-                  )}
-                  {item.action !== 'none' && (
-                    <button onClick={() => handleAddToPlan(item)}
-                      className="mt-0.5 px-1.5 py-0.5 rounded text-xs"
-                      style={{ backgroundColor: addedToPlan.has(item.id) ? '#10b981' : 'var(--color-primary)', color: 'white' }}>
-                      {addedToPlan.has(item.id) ? '✓ Добавлено' : 'Назначить'}
-                    </button>
-                  )}
-                </div>
+                <span className="flex-1 truncate">{item.name}</span>
+                <button onClick={() => handleAddToPlan(item)}
+                  className="px-1.5 py-0.5 rounded text-xs"
+                  style={{ backgroundColor: addedToPlan.has(item.id) ? '#10b981' : 'var(--color-primary)', color: 'white' }}>
+                  {addedToPlan.has(item.id) ? '✓' : '+'}
+                </button>
+              </div>
+            ))}
+            {waitingItems.slice(0, 2).map(item => (
+              <div key={item.id} className="flex items-center gap-1">
+                <span style={{ color: item.priority === 'P0' ? '#ef4444' : '#f59e0b' }}>{item.priority}</span>
+                <span className="flex-1 truncate">{item.description}</span>
+                <button onClick={() => handleAddResult(item)}
+                  className="px-1.5 py-0.5 rounded text-xs"
+                  style={{ backgroundColor: '#10b981', color: 'white' }}>✓</button>
+              </div>
+            ))}
+            {problems.slice(0, 2).map(p => (
+              <div key={p.id} className="flex items-center gap-1">
+                <span style={{ color: '#ef4444' }}>●</span>
+                <span className="flex-1 truncate">{p.title}</span>
+                <button onClick={() => handleResolveProblem(p.id)}
+                  className="text-xs" style={{ color: '#10b981' }}>✓</button>
               </div>
             ))}
           </div>
         </div>
       )}
 
-      {/* Активные направления */}
-      {waitingItems.length > 0 && (
+      {/* 4. Витальные с прошлого визита */}
+      {previousVitals && (
         <div className="pb-2 border-b" style={{ borderColor: 'var(--color-border)' }}>
-          <div className="flex items-center gap-1.5 mb-1.5">
-            <FlaskConical size={13} style={{ color: '#f59e0b' }} />
-            <span className="font-semibold" style={{ color: 'var(--color-foreground)' }}>Активные направления</span>
-            <span className="ml-auto px-1.5 py-0.5 rounded-full text-xs" style={{ backgroundColor: 'var(--color-muted)' }}>{waitingItems.length}</span>
+          <div className="flex items-center gap-1.5 mb-1">
+            <Activity size={12} style={{ color: '#3b82f6' }} />
+            <span className="font-semibold" style={{ color: 'var(--color-foreground)' }}>Витальные</span>
+            <span style={{ color: 'var(--color-muted-foreground)', fontSize: '10px' }}>
+              {formatDateRu(previousVitals.timestamp)}
+            </span>
           </div>
-          <div className="space-y-1">
-            {waitingItems.slice(0, 5).map(item => (
-              <div key={item.id} className="flex items-start gap-1.5">
-                <span style={{ color: item.priority === 'P0' ? '#ef4444' : item.priority === 'P1' ? '#f59e0b' : 'var(--color-muted-foreground)' }}>{item.priority}</span>
-                <div className="flex-1 min-w-0">
-                  <div style={{ color: 'var(--color-foreground)' }}>{item.description}</div>
-                  {item.deadline && (
-                    <div style={{ color: isOverdue(item.deadline) ? '#ef4444' : 'var(--color-muted-foreground)', fontSize: '10px' }}>До: {formatDateRu(item.deadline)}</div>
-                  )}
-                  <button onClick={() => handleAddResult(item)}
-                    className="mt-0.5 px-1.5 py-0.5 rounded text-xs"
-                    style={{ backgroundColor: '#10b981', color: 'white' }}>Внести результат</button>
+          <div className="space-y-0.5">
+            {['systolic_bp', 'diastolic_bp', 'heart_rate', 'spo2', 'temperature'].map(key => {
+              const param = previousVitals.parameters.find(p => p.key === key);
+              if (!param) return null;
+              const label = paramLabel(key);
+              const value = param.value;
+              const unit = param.unit || '';
+              return (
+                <div key={key}>
+                  {label}: {value} {unit}
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}
 
-      {/* Дневник проблем */}
-      <div className="pb-2 border-b" style={{ borderColor: 'var(--color-border)' }}>
-        <div className="flex items-center gap-1.5 mb-1.5">
-          <AlertTriangle size={13} style={{ color: '#ef4444' }} />
-          <span className="font-semibold" style={{ color: 'var(--color-foreground)' }}>Дневник проблем</span>
-          <button onClick={() => setShowAddProblem(!showAddProblem)}
-            className="ml-auto text-xs px-1.5 py-0.5 rounded"
-            style={{ backgroundColor: 'var(--color-primary)', color: 'var(--color-primary-foreground)' }}>+</button>
-        </div>
-        {showAddProblem && (
-          <div className="flex gap-1 mb-2">
-            <input type="text" value={newProblemTitle} onChange={e => setNewProblemTitle(e.target.value)}
-              placeholder="Название проблемы" onKeyDown={e => { if (e.key === 'Enter') handleAddProblem(); }}
-              className="flex-1 px-2 py-1 rounded border text-xs"
-              style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-background)', color: 'var(--color-foreground)' }} />
-            <button onClick={handleAddProblem}
-              className="px-2 py-1 rounded text-xs font-medium"
-              style={{ backgroundColor: 'var(--color-primary)', color: 'var(--color-primary-foreground)' }}>OK</button>
-          </div>
-        )}
-        {problems.length === 0 ? (
-          <div style={{ color: 'var(--color-muted-foreground)' }}>Нет активных проблем</div>
-        ) : (
-          <div className="space-y-1">
-            {problems.slice(0, 5).map(p => (
-              <div key={p.id} className="flex items-start gap-1.5">
-                <span style={{ color: p.status === 'active' ? '#ef4444' : '#f59e0b', fontSize: '8px' }}>●</span>
-                <div className="flex-1 min-w-0">
-                  <div style={{ color: 'var(--color-foreground)' }}>{p.title}</div>
-                  <div style={{ color: 'var(--color-muted-foreground)', fontSize: '10px' }}>
-                    {formatDateRu(p.startedAt)}
-                    {p.icdCode && <span className="ml-1 font-mono">({p.icdCode})</span>}
-                  </div>
-                  <button onClick={() => handleResolveProblem(p.id)}
-                    className="mt-0.5 text-xs" style={{ color: '#10b981' }}>✓ Решено</button>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      {/* Последние результаты */}
+            {/* 5. Последние результаты */}
       {lastResults.length > 0 && (
         <div className="pb-2 border-b" style={{ borderColor: 'var(--color-border)' }}>
-          <div className="flex items-center gap-1.5 mb-1.5">
-            <Activity size={13} style={{ color: '#10b981' }} />
-            <span className="font-semibold" style={{ color: 'var(--color-foreground)' }}>Последние результаты</span>
+          <div className="flex items-center gap-1.5 mb-1">
+            <FlaskConical size={12} style={{ color: '#10b981' }} />
+            <span className="font-semibold" style={{ color: 'var(--color-foreground)' }}>Результаты</span>
           </div>
-          <div className="space-y-1">
-            {lastResults.map(r => (
-              <div key={r.id}>
-                <div style={{ color: 'var(--color-foreground)' }}>
-                  {r.parameters.find(p => p.key === 'report_name')?.value || r.title}
+          {lastResults.map((r, i) => {
+            const name = String(r.parameters.find(p => p.key === 'report_name')?.value || r.title || '');
+            const conclusion = String(r.parameters.find(p => p.key === 'conclusion')?.value || '');
+            
+            // Определяем статус: есть ли патология
+            const numericParams = r.parameters.filter(p =>
+              !['report_name', 'conclusion', 'screening_type', 'performed_by'].includes(p.key) &&
+              typeof p.value === 'number'
+            );
+            
+            // Проверяем, есть ли отклонения (упрощённо: значение < refMin или > refMax)
+            const hasAbnormal = numericParams.some(p => {
+              if (p.refMin !== undefined && Number(p.value) < p.refMin) return true;
+              if (p.refMax !== undefined && Number(p.value) > p.refMax) return true;
+              return false;
+            });
+            
+            // Статус: normal / abnormal / unknown
+            let status: 'normal' | 'abnormal' | 'unknown' = 'unknown';
+            if (numericParams.length > 0) {
+              status = hasAbnormal ? 'abnormal' : 'normal';
+            } else if (conclusion) {
+              const cl = conclusion.toLowerCase();
+              if (cl.includes('патолог') || cl.includes('отклонен') || cl.includes('нарушен')) {
+                status = 'abnormal';
+              } else if (cl.includes('норм') || cl.includes('без патолог') || cl.includes('не изменен')) {
+                status = 'normal';
+              }
+            }
+            
+            const statusIcon = status === 'abnormal' ? '🔴' : status === 'normal' ? '🟢' : '⬜';
+            
+            // Tooltip: все параметры + заключение
+            const allParams = r.parameters
+              .filter(p => !['report_name', 'conclusion', 'screening_type', 'performed_by'].includes(p.key))
+              .filter(p => p.value !== '' && p.value !== null && p.value !== undefined)
+              .map(p => {
+                const label = paramLabel(p.key);
+                const val = typeof p.value === 'number' ? p.value : p.value;
+                const unit = p.unit || '';
+                let suffix = '';
+                if (typeof p.value === 'number' && p.refMin !== undefined && p.refMax !== undefined) {
+                  suffix = ` (N: ${p.refMin}-${p.refMax})`;
+                  if (Number(p.value) < p.refMin) suffix += ' ↓';
+                  else if (Number(p.value) > p.refMax) suffix += ' ↑';
+                }
+                return `${label}: ${val} ${unit}${suffix}`;
+              });
+            
+            const tooltip = [
+              name,
+              ...allParams,
+              conclusion ? `\nЗаключение: ${conclusion}` : '',
+            ].filter(Boolean).join('\n');
+            
+            // Краткое описание для колонки
+            let summary = '';
+            if (status === 'abnormal' && numericParams.length > 0) {
+              const abnormal = numericParams.filter(p => {
+                if (p.refMin !== undefined && Number(p.value) < p.refMin) return true;
+                if (p.refMax !== undefined && Number(p.value) > p.refMax) return true;
+                return false;
+              });
+              summary = abnormal.map(p => paramLabel(p.key)).join(', ') + ' — отклонение';
+            } else if (status === 'abnormal' && conclusion) {
+              summary = conclusion.substring(0, 40);
+            } else if (status === 'normal') {
+              summary = conclusion ? conclusion.substring(0, 40) : 'без патологии';
+            } else {
+              summary = conclusion ? conclusion.substring(0, 40) : 'выполнено';
+            }
+
+            return (
+              <div key={i} title={tooltip} className="cursor-help">
+                <div className="flex items-center gap-1">
+                  <span>{statusIcon}</span>
+                  <span style={{ color: 'var(--color-foreground)' }}>{name}</span>
                 </div>
-                <div style={{ color: 'var(--color-muted-foreground)', fontSize: '10px' }}>{formatDateRu(r.timestamp)}</div>
+                <div style={{ color: 'var(--color-muted-foreground)', fontSize: '10px' }} className="ml-4">
+                  {summary}
+                </div>
+                <div style={{ color: 'var(--color-muted-foreground)', fontSize: '10px' }} className="ml-4">
+                  {formatDateRu(r.timestamp)}
+                </div>
               </div>
-            ))}
-          </div>
+            );
+          })}
         </div>
       )}
 
-      {/* Диагнозы */}
-      {activeDiagnoses.length > 0 && (
+      {/* 6. Текущая терапия */}
+      {uniqueMeds.size > 0 && (
         <div className="pb-2 border-b" style={{ borderColor: 'var(--color-border)' }}>
-          <div className="flex items-center gap-1.5 mb-1.5">
-            <Activity size={13} style={{ color: 'var(--color-primary)' }} />
-            <span className="font-semibold" style={{ color: 'var(--color-foreground)' }}>Диагнозы</span>
+          <div className="flex items-center gap-1.5 mb-1">
+            <Pill size={12} style={{ color: '#f59e0b' }} />
+            <span className="font-semibold" style={{ color: 'var(--color-foreground)' }}>Терапия</span>
           </div>
-          {activeDiagnoses.map(d => (
-            <div key={d.id}>
-              <span className="font-mono" style={{ color: 'var(--color-primary)' }}>
-                {d.parameters.find(p => p.key === 'diagnosis_code')?.value}
-              </span>
-              <span className="ml-1" style={{ color: 'var(--color-muted-foreground)' }}>{d.title?.substring(0, 35)}</span>
+          {Array.from(uniqueMeds.entries()).slice(0, 5).map(([name, dose]) => (
+            <div key={name} style={{ color: 'var(--color-foreground)' }}>
+              {name} {dose}
             </div>
           ))}
+          {uniqueMeds.size > 5 && (
+            <div style={{ color: 'var(--color-muted-foreground)' }}>
+              + ещё {uniqueMeds.size - 5}
+            </div>
+          )}
         </div>
       )}
 
-      {/* Витальные */}
-      {lastVitals.length > 0 && (
-        <div className="pb-2 border-b" style={{ borderColor: 'var(--color-border)' }}>
-          <div className="font-semibold mb-1" style={{ color: 'var(--color-foreground)' }}>Показатели</div>
-          {lastVitals.map(v => {
-            const sbp = v.parameters.find(p => p.key === 'systolic_bp')?.value;
-            const dbp = v.parameters.find(p => p.key === 'diastolic_bp')?.value;
-            const hr = v.parameters.find(p => p.key === 'heart_rate')?.value;
-            return (
-              <div key={v.id}>
-                {sbp && dbp && <div>АД: {sbp}/{dbp}</div>}
-                {hr && <div>ЧСС: {hr}</div>}
-                <div style={{ fontSize: '10px', color: 'var(--color-muted-foreground)' }}>{formatDateRu(v.timestamp)}</div>
-              </div>
-            );
-          })}
-        </div>
-      )}
-
-      {/* Назначения */}
-      {lastPrescriptions.length > 0 && (
-        <div className="pb-2 border-b" style={{ borderColor: 'var(--color-border)' }}>
-          <div className="flex items-center gap-1.5 mb-1.5">
-            <Pill size={13} style={{ color: '#f59e0b' }} />
-            <span className="font-semibold" style={{ color: 'var(--color-foreground)' }}>Назначения</span>
-          </div>
-          {lastPrescriptions.map(p => {
-            const name = p.parameters.find(pr => pr.key === 'drug_name')?.value;
-            const dose = p.parameters.find(pr => pr.key === 'drug_dose')?.value;
-            return (
-              <div key={p.id}>
-                {name} {dose}
-                <div style={{ fontSize: '10px', color: 'var(--color-muted-foreground)' }}>{formatDateRu(p.timestamp)}</div>
-              </div>
-            );
-          })}
-        </div>
-      )}
-
-      {/* История */}
+      {/* 7. История визитов */}
       <div>
-        <div className="flex items-center gap-1.5 mb-1.5">
-          <Calendar size={13} style={{ color: 'var(--color-muted-foreground)' }} />
-          <span className="font-semibold" style={{ color: 'var(--color-foreground)' }}>История визитов</span>
+        <div className="flex items-center gap-1.5 mb-1">
+          <Calendar size={12} style={{ color: 'var(--color-muted-foreground)' }} />
+          <span className="font-semibold" style={{ color: 'var(--color-foreground)' }}>История</span>
         </div>
         {loading ? (
           <div style={{ color: 'var(--color-muted-foreground)' }}>Загрузка...</div>
-        ) : sortedDates.length === 0 ? (
+        ) : visitDates.length === 0 ? (
           <div style={{ color: 'var(--color-muted-foreground)' }}>Нет данных</div>
         ) : (
-          <div className="space-y-1.5">
-            {sortedDates.slice(0, 8).map(date => (
-              <div key={date}>
-                <div className="font-medium" style={{ color: 'var(--color-foreground)' }}>{formatDateRu(date)}</div>
-                {groupedEvents[date].slice(0, 3).map(event => (
-                  <div key={event.id} className="flex items-start gap-1 ml-1 mt-0.5">
-                    <ChevronRight size={9} className="mt-0.5 shrink-0" style={{ color: 'var(--color-muted-foreground)' }} />
-                    <span style={{ color: 'var(--color-muted-foreground)', fontSize: '10px' }}>{event.title?.substring(0, 40)}</span>
+          visitDates.map(date => {
+            const diag = getDiagForDate(date);
+            const tooltip = getVisitTooltip(date);
+            return (
+              <div key={date} title={tooltip} className="cursor-help">
+                <div className="font-medium" style={{ color: 'var(--color-foreground)' }}>
+                  {formatDateRu(date)}
+                </div>
+                {diag && (
+                  <div className="ml-1 text-xs" style={{ color: 'var(--color-muted-foreground)' }}>
+                    <span className="font-mono" style={{ color: 'var(--color-primary)' }}>
+                      {diag.parameters.find(p => p.key === 'diagnosis_code')?.value}
+                    </span>{' '}
+                    {String(diag.parameters.find(p => p.key === 'diagnosis_name')?.value || diag.title || '').substring(0, 65)}
                   </div>
-                ))}
+                )}
               </div>
-            ))}
-          </div>
+            );
+          })
         )}
       </div>
 
@@ -508,11 +575,15 @@ export function ContextColumn() {
         isOpen={instrumentalModal.isOpen}
         onClose={handleModalClose}
         patientId={currentVisit.patientId}
-        prefilled={instrumentalModal.waitingItem ? {
-          waitingItemId: instrumentalModal.waitingItem.id,
-          type: instrumentalModal.waitingItem.type === 'обследование' ? 'imaging' : 'consultation',
-          name: instrumentalModal.waitingItem.description,
-        } : undefined}
+        prefilled={
+          instrumentalModal.waitingItem
+            ? {
+                waitingItemId: instrumentalModal.waitingItem.id,
+                type: instrumentalModal.waitingItem.type === 'обследование' ? 'imaging' as const : 'consultation' as const,
+                name: instrumentalModal.waitingItem.description,
+              }
+            : undefined
+        }
       />
     </div>
   );

@@ -150,46 +150,61 @@ function SystemExamRow({ system, index, onUpdate }: {
   index: number;
   onUpdate: (upd: Partial<import('@core/types/visit').SystemExamState>) => void;
 }) {
+  const [expanded, setExpanded] = useState(system.status === 'pathology' || system.status === 'not_examined');
+
+  useEffect(() => {
+    if (system.status === 'pathology' || system.status === 'not_examined') {
+      setExpanded(true);
+    }
+  }, [system.status]);
+
   const statusConfig = {
-    normal: { label: 'Норма', color: '#10b981' },
-    pathology: { label: 'Патология', color: '#ef4444' },
-    not_examined: { label: 'Не осмотрен', color: '#6b7280' },
+    normal: { label: 'Норма', color: '#10b981', bg: '#dcfce7' },
+    pathology: { label: 'Патология', color: '#ef4444', bg: '#fef2f2' },
+    not_examined: { label: 'Не осмотрен', color: '#6b7280', bg: '#f3f4f6' },
   };
 
+  const config = statusConfig[system.status];
+
   return (
-    <div className="flex items-start gap-2 py-1.5 border-b border-dashed" style={{ borderColor: 'var(--color-border)' }}>
-      <span className="text-sm mt-0.5">{system.icon}</span>
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2">
-          <span className="text-sm font-medium truncate" style={{ color: 'var(--color-foreground)' }}>{system.shortName}</span>
-          <div className="flex gap-1">
-            {(['normal', 'pathology', 'not_examined'] as const).map(status => (
-              <button key={status} onClick={() => onUpdate({ status })}
-                className="px-1.5 py-0.5 rounded text-xs border"
-                style={{
-                  backgroundColor: system.status === status ? statusConfig[status].color : 'transparent',
-                  color: system.status === status ? 'white' : 'var(--color-foreground)',
-                  borderColor: statusConfig[status].color,
-                  fontSize: '10px',
-                }}>
-                {statusConfig[status].label}
-              </button>
-            ))}
-          </div>
-        </div>
-        {system.status === 'pathology' && (
-          <input type="text" value={system.text}
-            onChange={e => onUpdate({ text: e.target.value })}
-            placeholder="Опишите патологию..."
-            className="w-full mt-1 px-2 py-1 rounded border text-xs"
-            style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-background)', color: 'var(--color-foreground)' }} />
-        )}
-        {system.status === 'normal' && (
-          <p className="text-xs mt-0.5 truncate" style={{ color: 'var(--color-muted-foreground)' }}>
-            {system.text.substring(0, 80)}{system.text.length > 80 ? '...' : ''}
-          </p>
-        )}
+    <div className="py-1.5 border-b border-dashed" style={{ borderColor: 'var(--color-border)' }}>
+      <div className="flex items-center gap-2 cursor-pointer" onClick={() => setExpanded(!expanded)}>
+        <span className="text-sm">{system.icon}</span>
+        <span className="text-sm font-medium flex-1 truncate" style={{ color: 'var(--color-foreground)' }}>{system.shortName}</span>
+        <span className="text-xs px-2 py-0.5 rounded" style={{ backgroundColor: config.bg, color: config.color }}>
+          {config.label}
+        </span>
+        <span style={{ color: 'var(--color-muted-foreground)' }}>
+          {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+        </span>
       </div>
+      {expanded && (
+        <div className="mt-1.5 pl-6">
+          {system.status === 'pathology' ? (
+            <input type="text" value={system.text}
+              onChange={e => onUpdate({ text: e.target.value })}
+              placeholder="Опишите патологию..."
+              className="w-full px-2 py-1.5 rounded border text-xs"
+              style={{ borderColor: '#ef4444', backgroundColor: '#fef2f2', color: 'var(--color-foreground)' }} />
+          ) : system.status === 'normal' ? (
+            <p className="text-xs" style={{ color: 'var(--color-muted-foreground)' }}>
+              {system.text}
+              <button onClick={(e) => { e.stopPropagation(); onUpdate({ status: 'pathology' }); }}
+                className="ml-2 text-xs" style={{ color: 'var(--color-primary)' }}>изменить</button>
+            </p>
+          ) : (
+            <div className="flex gap-1">
+              {(['normal', 'pathology'] as const).map(status => (
+                <button key={status} onClick={() => onUpdate({ status })}
+                  className="px-2 py-0.5 rounded text-xs border"
+                  style={{ borderColor: statusConfig[status].color, color: statusConfig[status].color }}>
+                  {statusConfig[status].label}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -329,6 +344,10 @@ export function VisitProtocol() {
   const [deprescribeReason, setDeprescribeReason] = useState('');
   const [showSymptomHelper, setShowSymptomHelper] = useState(false);
   const [redFlags, setRedFlags] = useState<any[]>([]);
+  const [showRotateDiagnosis, setShowRotateDiagnosis] = useState(false);
+const [rotateTarget, setRotateTarget] = useState<'complications' | 'concomitant' | 'background'>('concomitant');
+const [rotateNewCode, setRotateNewCode] = useState('');
+const [rotateNewName, setRotateNewName] = useState('');
 
   const selectedPatient = patients.find(p => p.id === selectedPatientId);
 
@@ -745,73 +764,90 @@ useEffect(() => {
               </Section>
 
               {/* 5. Объективный статус */}
-              <Section id="exam" title="Объективный статус" icon="🔍"
+                            <Section id="exam" title="Объективный статус" icon="🔍"
                 expanded={expandedSections.includes('exam')} onToggle={() => toggleSection('exam')}
-                badge={`${currentVisit.physicalExam.filter(s => s.status === 'pathology').length} пат.`}>
-                <div className="space-y-3">
-                  <div className="flex gap-2 flex-wrap">
+                badge={`${currentVisit.physicalExam.filter(s => s.status === 'pathology').length} пат. / ${currentVisit.physicalExam.filter(s => s.status === 'not_examined').length} не осм.`}>
+                <div className="space-y-1">
+                  <div className="flex gap-2 flex-wrap mb-3">
                     <button onClick={setAllSystemsNormal}
                       className="px-3 py-1.5 rounded-lg text-xs font-medium border"
-                      style={{ borderColor: 'var(--color-border)', color: 'var(--color-foreground)' }}>✅ Все системы — норма</button>
+                      style={{ borderColor: 'var(--color-border)', color: 'var(--color-foreground)' }}>✅ Все — норма</button>
                     <button onClick={markAllSystemsUnchanged}
                       className="px-3 py-1.5 rounded-lg text-xs font-medium border"
                       style={{ borderColor: 'var(--color-border)', color: 'var(--color-foreground)' }}>✓ Без изменений</button>
                     {currentVisit.previousExamSystems.length > 0 && (
                       <button onClick={() => loadPreviousSystems()}
                         className="px-3 py-1.5 rounded-lg text-xs font-medium border"
-                        style={{ borderColor: 'var(--color-primary)', color: 'var(--color-primary)' }}>📋 Перенести из прошлого визита</button>
+                        style={{ borderColor: 'var(--color-primary)', color: 'var(--color-primary)' }}>📋 Из прошлого</button>
                     )}
                   </div>
-                  <div className="space-y-1">
-                    {currentVisit.physicalExam.map((system, i) => (
-                      <SystemExamRow key={system.system} system={system} index={i}
-                        onUpdate={(upd) => updateSystemExam(i, upd)} />
-                    ))}
-                  </div>
+                  {currentVisit.physicalExam.map((system, i) => (
+                    <SystemExamRow key={system.system} system={system} index={i}
+                      onUpdate={(upd) => updateSystemExam(i, upd)} />
+                  ))}
                 </div>
               </Section>
 
-              {/* 6. Диагноз */}
+                            {/* 6. Диагноз */}
               <Section id="diagnosis" title="Диагноз" icon="🏥"
                 expanded={expandedSections.includes('diagnosis')} onToggle={() => toggleSection('diagnosis')}>
-                <div className="space-y-4">
-                  <div className="p-4 rounded-lg border" style={{ borderColor: validationErrors.includes('diagnosis') ? '#ef4444' : 'var(--color-border)', backgroundColor: 'var(--color-background)' }}>
-                    <h4 className="text-xs font-semibold mb-2" style={{ color: 'var(--color-foreground)' }}>а) Основное заболевание</h4>
-                    <div className="grid grid-cols-[1fr,2fr] gap-3 mb-2">
-                      <div>
-                        <label className="block text-xs mb-1" style={{ color: 'var(--color-muted-foreground)' }}>Код МКБ-10</label>
-                        <div className="relative">
-                          <button type="button" onClick={() => { setIcd10Target('primary'); setShowICD10Search(true); }}
-                            className="w-full px-3 py-2 rounded-lg border text-sm text-left transition-colors hover:bg-muted/50 font-mono"
-                            style={{
-                              borderColor: validationErrors.includes('diagnosis') ? '#ef4444' : currentVisit.diagnosis.primary.code ? 'var(--color-primary)' : 'var(--color-border)',
-                              backgroundColor: validationErrors.includes('diagnosis') ? '#fef2f2' : 'var(--color-card)',
-                              color: currentVisit.diagnosis.primary.code ? 'var(--color-primary)' : 'var(--color-muted-foreground)',
-                            }}>
-                            {currentVisit.diagnosis.primary.code || '🔍 Выбрать код... (обязательно)'}
-                          </button>
-                          {currentVisit.diagnosis.primary.code && (
-                            <button type="button" onClick={() => { setFormulationTarget({ type: 'primary' }); setShowFormulationModal(true); }}
-                              className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded hover:bg-muted"
-                              style={{ color: 'var(--color-muted-foreground)' }} title="Выбрать формулировку"><FileText size={14} /></button>
-                          )}
-                        </div>
-                      </div>
-                      <Input label="Клиническая формулировка" value={currentVisit.diagnosis.primary.name}
-                        onChange={v => updatePrimaryDiagnosis({ name: v })}
-                        placeholder="Гипертоническая болезнь II стадии, 2 степени, риск 3" />
+                <div className="space-y-3">
+                  
+                  {/* Основной */}
+                  <div>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <span className="text-xs font-semibold" style={{ color: 'var(--color-foreground)' }}>Основной</span>
+                      {currentVisit.diagnosis.primary.code && (
+                        <button onClick={() => {
+                          setShowRotateDiagnosis(true);
+                        }}
+                          className="text-xs px-2 py-0.5 rounded border"
+                          style={{ borderColor: 'var(--color-border)', color: 'var(--color-muted-foreground)' }}>
+                          🔄 Сменить основной
+                        </button>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2 mb-2">
+                      <button type="button" onClick={() => { setIcd10Target('primary'); setShowICD10Search(true); }}
+                        className="px-3 py-2 rounded-lg border text-sm text-left font-mono shrink-0"
+                        style={{
+                          borderColor: validationErrors.includes('diagnosis') ? '#ef4444' : currentVisit.diagnosis.primary.code ? 'var(--color-primary)' : 'var(--color-border)',
+                          backgroundColor: validationErrors.includes('diagnosis') ? '#fef2f2' : 'var(--color-card)',
+                          color: currentVisit.diagnosis.primary.code ? 'var(--color-primary)' : 'var(--color-muted-foreground)',
+                        }}>
+                        {currentVisit.diagnosis.primary.code || '🔍 Код...'}
+                      </button>
+                      <input type="text" value={currentVisit.diagnosis.primary.name}
+                        onChange={e => updatePrimaryDiagnosis({ name: e.target.value })}
+                        placeholder="Клиническая формулировка"
+                        className="flex-1 px-3 py-2 rounded-lg border text-sm"
+                        style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-background)', color: 'var(--color-foreground)' }} />
+                      {currentVisit.diagnosis.primary.code && (
+                        <button onClick={() => { setFormulationTarget({ type: 'primary' }); setShowFormulationModal(true); }}
+                          className="p-2 rounded-lg border" style={{ borderColor: 'var(--color-border)', color: 'var(--color-muted-foreground)' }}>
+                          <FileText size={14} />
+                        </button>
+                      )}
                     </div>
                     <label className="flex items-center gap-2 text-sm" style={{ color: 'var(--color-foreground)' }}>
                       <input type="checkbox" checked={currentVisit.diagnosis.primary.isFirstTime}
                         onChange={e => updatePrimaryDiagnosis({ isFirstTime: e.target.checked })} />
-                      Диагноз установлен впервые
+                      Впервые
                     </label>
                   </div>
 
-                  <div className="p-4 rounded-lg border" style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-background)' }}>
-                    <h4 className="text-xs font-semibold mb-2" style={{ color: 'var(--color-foreground)' }}>б) Осложнения</h4>
-                    {currentVisit.diagnosis.complications.length > 0 && (
-                      <div className="space-y-1.5 mb-3">
+                  <div className="border-t" style={{ borderColor: 'var(--color-border)' }} />
+
+                  {/* Осложнения */}
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-xs font-semibold" style={{ color: 'var(--color-foreground)' }}>Осложнения</span>
+                      <button onClick={() => { setIcd10Target('complications'); setShowICD10Search(true); }}
+                        className="text-xs px-2 py-1 rounded border"
+                        style={{ borderColor: 'var(--color-border)', color: 'var(--color-muted-foreground)' }}>+ Добавить</button>
+                    </div>
+                    {currentVisit.diagnosis.complications.length > 0 ? (
+                      <div className="space-y-1">
                         {currentVisit.diagnosis.complications.map(d => (
                           <DiagnosisBadge key={d.code} item={d}
                             onRemove={() => removeDiagnosisItem('complications', d.code)}
@@ -819,16 +855,21 @@ useEffect(() => {
                             onSelectFormulation={() => { setFormulationTarget({ type: 'complications', code: d.code }); setShowFormulationModal(true); }} />
                         ))}
                       </div>
+                    ) : (
+                      <div className="text-xs" style={{ color: 'var(--color-muted-foreground)' }}>(нет)</div>
                     )}
-                    <button type="button" onClick={() => { setIcd10Target('complications'); setShowICD10Search(true); }}
-                      className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs border transition-colors hover:bg-muted/50"
-                      style={{ borderColor: 'var(--color-border)', color: 'var(--color-muted-foreground)' }}><Plus size={14} /> Добавить</button>
                   </div>
 
-                  <div className="p-4 rounded-lg border" style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-background)' }}>
-                    <h4 className="text-xs font-semibold mb-2" style={{ color: 'var(--color-foreground)' }}>в) Сопутствующие</h4>
-                    {currentVisit.diagnosis.concomitant.length > 0 && (
-                      <div className="space-y-1.5 mb-3">
+                  {/* Сопутствующие */}
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-xs font-semibold" style={{ color: 'var(--color-foreground)' }}>Сопутствующие</span>
+                      <button onClick={() => { setIcd10Target('concomitant'); setShowICD10Search(true); }}
+                        className="text-xs px-2 py-1 rounded border"
+                        style={{ borderColor: 'var(--color-border)', color: 'var(--color-muted-foreground)' }}>+ Добавить</button>
+                    </div>
+                    {currentVisit.diagnosis.concomitant.length > 0 ? (
+                      <div className="space-y-1">
                         {currentVisit.diagnosis.concomitant.map(d => (
                           <DiagnosisBadge key={d.code} item={d}
                             onRemove={() => removeDiagnosisItem('concomitant', d.code)}
@@ -836,16 +877,21 @@ useEffect(() => {
                             onSelectFormulation={() => { setFormulationTarget({ type: 'concomitant', code: d.code }); setShowFormulationModal(true); }} />
                         ))}
                       </div>
+                    ) : (
+                      <div className="text-xs" style={{ color: 'var(--color-muted-foreground)' }}>(нет)</div>
                     )}
-                    <button type="button" onClick={() => { setIcd10Target('concomitant'); setShowICD10Search(true); }}
-                      className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs border transition-colors hover:bg-muted/50"
-                      style={{ borderColor: 'var(--color-border)', color: 'var(--color-muted-foreground)' }}><Plus size={14} /> Добавить</button>
                   </div>
 
-                  <div className="p-4 rounded-lg border" style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-background)' }}>
-                    <h4 className="text-xs font-semibold mb-2" style={{ color: 'var(--color-foreground)' }}>г) Фоновые</h4>
-                    {currentVisit.diagnosis.background.length > 0 && (
-                      <div className="space-y-1.5 mb-3">
+                  {/* Фоновые */}
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-xs font-semibold" style={{ color: 'var(--color-foreground)' }}>Фоновые</span>
+                      <button onClick={() => { setIcd10Target('background'); setShowICD10Search(true); }}
+                        className="text-xs px-2 py-1 rounded border"
+                        style={{ borderColor: 'var(--color-border)', color: 'var(--color-muted-foreground)' }}>+ Добавить</button>
+                    </div>
+                    {currentVisit.diagnosis.background.length > 0 ? (
+                      <div className="space-y-1">
                         {currentVisit.diagnosis.background.map(d => (
                           <DiagnosisBadge key={d.code} item={d}
                             onRemove={() => removeDiagnosisItem('background', d.code)}
@@ -853,10 +899,9 @@ useEffect(() => {
                             onSelectFormulation={() => { setFormulationTarget({ type: 'background', code: d.code }); setShowFormulationModal(true); }} />
                         ))}
                       </div>
+                    ) : (
+                      <div className="text-xs" style={{ color: 'var(--color-muted-foreground)' }}>(нет)</div>
                     )}
-                    <button type="button" onClick={() => { setIcd10Target('background'); setShowICD10Search(true); }}
-                      className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs border transition-colors hover:bg-muted/50"
-                      style={{ borderColor: 'var(--color-border)', color: 'var(--color-muted-foreground)' }}><Plus size={14} /> Добавить</button>
                   </div>
                 </div>
               </Section>
@@ -990,7 +1035,7 @@ useEffect(() => {
                 </div>
               </Section>
 
-              {/* 8. Лечение */}
+                            {/* 8. Лечение */}
               <Section id="treatment" title="Лечение" icon="💊"
                 expanded={expandedSections.includes('treatment')} onToggle={() => toggleSection('treatment')}
                 highlight={validationErrors.includes('treatment')}>
@@ -1016,65 +1061,44 @@ useEffect(() => {
                   <div>
                     <h4 className="text-xs font-semibold mb-1.5" style={{ color: 'var(--color-foreground)' }}>б) Медикаментозное</h4>
 
-                    {/* Тактика */}
-                    <div className="p-3 rounded-lg border mb-3" style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-background)' }}>
-                      <div className="flex items-center justify-between mb-2">
-                        <h4 className="text-xs font-semibold" style={{ color: 'var(--color-foreground)' }}>Тактика лечения</h4>
-                        <span className="text-xs px-2 py-0.5 rounded" style={{
-                          backgroundColor: currentVisit.treatment.tactic === 'aggressive' ? '#fee2e2' : currentVisit.treatment.tactic === 'safe' ? '#dcfce7' : '#f3f4f6',
-                          color: currentVisit.treatment.tactic === 'aggressive' ? '#991b1b' : currentVisit.treatment.tactic === 'safe' ? '#166534' : '#6b7280',
-                        }}>
-                          {currentVisit.treatment.tactic === 'aggressive' ? '⚠️ Агрессивная' : currentVisit.treatment.tactic === 'safe' ? '🛡️ Безопасная' : '⚖️ Умеренная'}
-                        </span>
+                    {/* ⚙️ Настройки лечения */}
+                    <details className="mb-3">
+                      <summary className="text-xs cursor-pointer" style={{ color: 'var(--color-muted-foreground)' }}>
+                        ⚙️ Настройки лечения (тактика, профиль)
+                      </summary>
+                      <div className="mt-2 p-3 rounded-lg border" style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-background)' }}>
+                        <div className="flex items-center justify-between mb-2">
+                          <span className="text-xs font-medium" style={{ color: 'var(--color-foreground)' }}>Тактика</span>
+                          <span className="text-xs px-2 py-0.5 rounded" style={{
+                            backgroundColor: currentVisit.treatment.tactic === 'aggressive' ? '#fee2e2' : currentVisit.treatment.tactic === 'safe' ? '#dcfce7' : '#f3f4f6',
+                            color: currentVisit.treatment.tactic === 'aggressive' ? '#991b1b' : currentVisit.treatment.tactic === 'safe' ? '#166534' : '#6b7280',
+                          }}>
+                            {currentVisit.treatment.tactic === 'aggressive' ? '⚠️ Агрессивная' : currentVisit.treatment.tactic === 'safe' ? '🛡️ Безопасная' : '⚖️ Умеренная'}
+                          </span>
+                        </div>
+                        <div className="flex gap-2 mb-2">
+                          {(['aggressive', 'moderate', 'safe'] as const).map(t => (
+                            <button key={t} onClick={() => updateTreatment({ tactic: t })}
+                              className="px-3 py-1 rounded-lg text-xs font-medium border transition-colors"
+                              style={{
+                                borderColor: currentVisit.treatment.tactic === t ? 'var(--color-primary)' : 'var(--color-border)',
+                                backgroundColor: currentVisit.treatment.tactic === t ? 'var(--color-primary)' : 'transparent',
+                                color: currentVisit.treatment.tactic === t ? 'var(--color-primary-foreground)' : 'var(--color-foreground)',
+                              }}>{t === 'aggressive' ? 'Агрессивная' : t === 'moderate' ? 'Умеренная' : 'Безопасная'}</button>
+                          ))}
+                        </div>
+                        <textarea value={currentVisit.treatment.tacticRationale || ''}
+                          onChange={e => updateTreatment({ tacticRationale: e.target.value })}
+                          placeholder="Обоснование тактики..."
+                          rows={2} className="w-full px-2 py-1.5 rounded-lg border text-xs outline-none resize-none"
+                          style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-card)', color: 'var(--color-foreground)' }} />
+                        <button onClick={() => setShowBiopsychosocial(true)}
+                          className="mt-2 flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs border w-full"
+                          style={{ borderColor: '#8b5cf6', color: '#8b5cf6' }}>
+                          <Activity size={14} /> Биопсихосоциальный профиль
+                        </button>
                       </div>
-                      <div className="flex gap-2 mb-2">
-                        {(['aggressive', 'moderate', 'safe'] as const).map(t => (
-                          <button key={t} onClick={() => updateTreatment({ tactic: t })}
-                            className="px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors"
-                            style={{
-                              borderColor: currentVisit.treatment.tactic === t ? 'var(--color-primary)' : 'var(--color-border)',
-                              backgroundColor: currentVisit.treatment.tactic === t ? 'var(--color-primary)' : 'transparent',
-                              color: currentVisit.treatment.tactic === t ? 'var(--color-primary-foreground)' : 'var(--color-foreground)',
-                            }}>{t === 'aggressive' ? 'Агрессивная' : t === 'moderate' ? 'Умеренная' : 'Безопасная'}</button>
-                        ))}
-                      </div>
-                      <textarea value={currentVisit.treatment.tacticRationale || ''}
-                        onChange={e => updateTreatment({ tacticRationale: e.target.value })}
-                        placeholder="Обоснование тактики..."
-                        rows={2} className="w-full px-3 py-2 rounded-lg border text-xs outline-none resize-none"
-                        style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-card)', color: 'var(--color-foreground)' }} />
-                    </div>
-
-                    {/* Биопсихосоциальный профиль */}
-                    <div className="mb-3">
-                      <button onClick={() => setShowBiopsychosocial(true)}
-                        className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs border"
-                        style={{ borderColor: '#8b5cf6', color: '#8b5cf6' }}>
-                        <Activity size={14} /> Биопсихосоциальный профиль
-                      </button>
-                    </div>
-
-                    {/* Полипрагмазия */}
-                    {currentVisit.treatment.medications.length >= 5 && (
-                      <div className="p-2 rounded-lg mb-3 text-xs" style={{ backgroundColor: '#fef3c7', color: '#92400e' }}>
-                        ⚠️ Полипрагмазия: {currentVisit.treatment.medications.length} препаратов.
-                      </div>
-                    )}
-
-                    {/* STOPP */}
-                    {stoppAlerts.length > 0 && (
-                      <div className="p-2 rounded-lg border mb-3 text-xs" style={{ borderColor: '#ef4444', backgroundColor: '#fef2f2', color: '#991b1b' }}>
-                        <div className="font-medium mb-1">⚠️ STOPP-критерии (пациент ≥65 лет)</div>
-                        {stoppAlerts.map((rule: any) => (
-                          <div key={rule.id} className="mb-1">• {rule.description}: {rule.recommendation}</div>
-                        ))}
-                      </div>
-                    )}
-
-                    {/* Лекарственные взаимодействия */}
-                    {drugInteractions.length > 0 && showDrugAlerts && (
-                      <div className="mb-3"><DrugSafetyAlert interactions={drugInteractions} onDismiss={() => setShowDrugAlerts(false)} /></div>
-                    )}
+                    </details>
 
                     {/* Список препаратов */}
                     {currentVisit.treatment.medications.length > 0 && (
@@ -1088,21 +1112,22 @@ useEffect(() => {
                       </div>
                     )}
 
+                    {/* Кнопки */}
                     <div className="flex gap-2 mb-3 flex-wrap">
                       <button onClick={() => setShowMedicationSearch(true)}
                         className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium"
                         style={{ backgroundColor: 'var(--color-primary)', color: 'var(--color-primary-foreground)' }}>
                         <Search size={14} /> Найти препарат
                       </button>
-                      <button onClick={() => setShowSymptomHelper(true)}
-  className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs border"
-  style={{ borderColor: '#8b5cf6', color: '#8b5cf6' }}>
-  💡 Симптом-помощник
-</button>
                       <button onClick={() => { setEditingMed(null); setNewMed({ name: '', dose: '', frequency: '', duration: '30 дней', isBasic: false }); setShowAddMed(true); }}
                         className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs border"
                         style={{ borderColor: 'var(--color-border)', color: 'var(--color-muted-foreground)' }}>
                         <Plus size={14} /> Ввести вручную
+                      </button>
+                      <button onClick={() => setShowSymptomHelper(true)}
+                        className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs border"
+                        style={{ borderColor: '#8b5cf6', color: '#8b5cf6' }}>
+                        💡 Симптом-помощник
                       </button>
                       {currentVisit.treatment.basicTherapy.length > 0 && (
                         <button onClick={() => loadPreviousBasicTherapy()}
@@ -1113,23 +1138,62 @@ useEffect(() => {
                       )}
                     </div>
 
-                    {showAddMed && (
-                      <div className="p-3 rounded-lg border space-y-2" style={{ borderColor: 'var(--color-border)' }}>
-                        <label className="flex items-center gap-2 text-sm" style={{ color: 'var(--color-foreground)' }}>
-                          <input type="checkbox" checked={editingMed ? editingMed.isBasic : newMed.isBasic}
-                            onChange={e => editingMed ? setEditingMed({ ...editingMed, isBasic: e.target.checked }) : setNewMed(p => ({ ...p, isBasic: e.target.checked }))} />
-                          Базисная терапия
-                        </label>
-                        <div className="grid grid-cols-2 gap-2">
-                          <Input label="Препарат" value={editingMed ? editingMed.name : newMed.name}
-                            onChange={v => editingMed ? setEditingMed({ ...editingMed, name: v }) : setNewMed(p => ({ ...p, name: v }))} placeholder="Лизиноприл" />
-                          <Input label="Доза" value={editingMed ? editingMed.dose : newMed.dose}
-                            onChange={v => editingMed ? setEditingMed({ ...editingMed, dose: v }) : setNewMed(p => ({ ...p, dose: v }))} placeholder="10 мг" />
-                          <Input label="Кратность" value={editingMed ? editingMed.frequency : newMed.frequency}
-                            onChange={v => editingMed ? setEditingMed({ ...editingMed, frequency: v }) : setNewMed(p => ({ ...p, frequency: v }))} placeholder="1 раз в день" />
-                          <Input label="Длительность" value={editingMed ? editingMed.duration : newMed.duration}
-                            onChange={v => editingMed ? setEditingMed({ ...editingMed, duration: v }) : setNewMed(p => ({ ...p, duration: v }))} placeholder="30 дней" />
+                    {/* Предупреждения (компактно внизу) */}
+                    <div className="space-y-1.5">
+                      {currentVisit.treatment.medications.length >= 5 && (
+                        <div className="p-2 rounded text-xs" style={{ backgroundColor: '#fef3c7', color: '#92400e' }}>
+                          ⚠️ Полипрагмазия: {currentVisit.treatment.medications.length} препаратов
                         </div>
+                      )}
+                      {stoppAlerts.length > 0 && (
+                        <div className="p-2 rounded text-xs" style={{ backgroundColor: '#fef2f2', color: '#991b1b' }}>
+                          ⚠️ STOPP: {stoppAlerts.map((r: any) => r.description).join(', ')}
+                        </div>
+                      )}
+                      {drugInteractions.length > 0 && showDrugAlerts && (
+                        <DrugSafetyAlert interactions={drugInteractions} onDismiss={() => setShowDrugAlerts(false)} />
+                      )}
+                    </div>
+
+                    {/* Форма добавления */}
+                                        {showAddMed && (
+                      <div className="mt-3 p-3 rounded-lg border space-y-2" style={{ borderColor: 'var(--color-border)' }}>
+                        <div className="flex items-center gap-2">
+                          <input type="text" value={editingMed ? editingMed.name : newMed.name}
+                            onChange={e => editingMed ? setEditingMed({ ...editingMed, name: e.target.value }) : setNewMed(p => ({ ...p, name: e.target.value }))}
+                            placeholder="Препарат" className="flex-1 px-2 py-1.5 rounded border text-xs"
+                            style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-background)', color: 'var(--color-foreground)' }} />
+                          <input type="text" value={editingMed ? editingMed.dose : newMed.dose}
+                            onChange={e => editingMed ? setEditingMed({ ...editingMed, dose: e.target.value }) : setNewMed(p => ({ ...p, dose: e.target.value }))}
+                            placeholder="Доза" className="w-20 px-2 py-1.5 rounded border text-xs"
+                            style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-background)', color: 'var(--color-foreground)' }} />
+                          <input type="text" value={editingMed ? editingMed.frequency : newMed.frequency}
+                            onChange={e => editingMed ? setEditingMed({ ...editingMed, frequency: e.target.value }) : setNewMed(p => ({ ...p, frequency: e.target.value }))}
+                            placeholder="Кратность" className="w-24 px-2 py-1.5 rounded border text-xs"
+                            style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-background)', color: 'var(--color-foreground)' }} />
+                          <select value={editingMed ? editingMed.duration : newMed.duration}
+                            onChange={e => editingMed ? setEditingMed({ ...editingMed, duration: e.target.value }) : setNewMed(p => ({ ...p, duration: e.target.value }))}
+                            className="w-24 px-2 py-1.5 rounded border text-xs"
+                            style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-background)', color: 'var(--color-foreground)' }}>
+                            <option value="7 дней">7 дн</option>
+                            <option value="14 дней">14 дн</option>
+                            <option value="30 дней">30 дн</option>
+                            <option value="3 месяца">3 мес</option>
+                            <option value="постоянно">Постоянно</option>
+                          </select>
+                        </div>
+                        <label className="flex items-center gap-2 text-xs" style={{ color: 'var(--color-foreground)' }}>
+                          <input type="checkbox" checked={editingMed ? editingMed.isBasic : newMed.isBasic}
+                            onChange={e => {
+                              const basic = e.target.checked;
+                              if (editingMed) {
+                                setEditingMed({ ...editingMed, isBasic: basic, duration: basic ? 'постоянно' : editingMed.duration });
+                              } else {
+                                setNewMed(p => ({ ...p, isBasic: basic, duration: basic ? 'постоянно' : p.duration }));
+                              }
+                            }} />
+                          Базисная
+                        </label>
                         <div className="flex gap-2">
                           <button onClick={handleSaveMed}
                             className="px-3 py-1.5 rounded-lg text-xs font-medium"
@@ -1164,15 +1228,21 @@ useEffect(() => {
 
               {/* Модальные окна */}
               <ICD10SearchModal isOpen={showICD10Search} onClose={() => setShowICD10Search(false)}
-                onSelect={(code, name) => {
-                  switch (icd10Target) {
-                    case 'primary': updatePrimaryDiagnosis({ code, name }); break;
-                    case 'complications': addDiagnosisItem('complications', { code, name }); break;
-                    case 'concomitant': addDiagnosisItem('concomitant', { code, name }); break;
-                    case 'background': addDiagnosisItem('background', { code, name }); break;
-                  }
-                  setShowICD10Search(false);
-                }}
+  onSelect={(code, name) => {
+    if (showRotateDiagnosis && icd10Target === 'primary') {
+      // Если открыта ротация — сохраняем код в неё
+      setRotateNewCode(code);
+      setRotateNewName(name);
+    } else {
+      switch (icd10Target) {
+        case 'primary': updatePrimaryDiagnosis({ code, name }); break;
+        case 'complications': addDiagnosisItem('complications', { code, name }); break;
+        case 'concomitant': addDiagnosisItem('concomitant', { code, name }); break;
+        case 'background': addDiagnosisItem('background', { code, name }); break;
+      }
+    }
+    setShowICD10Search(false);
+  }}
                 title={icd10Target === 'primary' ? 'Поиск основного диагноза' : icd10Target === 'complications' ? 'Поиск осложнения' : icd10Target === 'concomitant' ? 'Поиск сопутствующего' : 'Поиск фонового'} />
 
               <FormulationSelectModal isOpen={showFormulationModal} onClose={() => setShowFormulationModal(false)}
@@ -1188,10 +1258,10 @@ useEffect(() => {
                 icd10Code={getFormulationCode()} />
 
               <MedicationSearchModal isOpen={showMedicationSearch} onClose={() => setShowMedicationSearch(false)}
-                onSelect={(inn, dosage, frequency, isBasic) => {
-                  addMedication({ name: inn, dose: dosage, frequency, duration: '30 дней', isBasic });
-                  setShowMedicationSearch(false);
-                }} />
+  onSelect={(inn, dosage, frequency, isBasic) => {
+    addMedication({ name: inn, dose: dosage, frequency, duration: isBasic ? 'постоянно' : '30 дней', isBasic });
+    setShowMedicationSearch(false);
+  }} />
 
               <BiopsychosocialModal isOpen={showBiopsychosocial} onClose={() => setShowBiopsychosocial(false)} />
 
@@ -1206,6 +1276,64 @@ useEffect(() => {
     updateTreatment({ nonDrugText: current ? current + '\n' + text : text });
   }}
 />
+
+{/* Модалка ротации диагноза */}
+{showRotateDiagnosis && (
+  <div className="fixed inset-0 z-[55] flex items-center justify-center bg-black/50" onClick={() => setShowRotateDiagnosis(false)}>
+    <div className="w-96 rounded-xl shadow-2xl p-4" style={{ backgroundColor: 'var(--color-card)' }} onClick={e => e.stopPropagation()}>
+      <h3 className="text-sm font-semibold mb-3" style={{ color: 'var(--color-foreground)' }}>🔄 Смена основного диагноза</h3>
+      
+      <div className="text-xs mb-2" style={{ color: 'var(--color-muted-foreground)' }}>
+        Текущий основной: <span className="font-mono" style={{ color: 'var(--color-primary)' }}>{currentVisit.diagnosis.primary.code}</span> {currentVisit.diagnosis.primary.name}
+      </div>
+
+      <div className="space-y-2 mb-3">
+        <label className="block text-xs">Новый основной диагноз</label>
+        <div className="flex gap-2">
+          <button onClick={() => { setIcd10Target('primary'); setShowICD10Search(true); }}
+  className="px-3 py-2 rounded-lg border text-sm font-mono"
+  style={{ borderColor: 'var(--color-border)', color: 'var(--color-primary)' }}>
+  {rotateNewCode || '🔍 Выбрать код'}
+</button>
+          <input type="text" value={rotateNewName} onChange={e => setRotateNewName(e.target.value)}
+            placeholder="Название нового основного"
+            className="flex-1 px-3 py-2 rounded-lg border text-sm"
+            style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-background)', color: 'var(--color-foreground)' }} />
+        </div>
+      </div>
+
+      <div className="mb-3">
+        <label className="block text-xs mb-1">Куда перенести старый основной?</label>
+        <select value={rotateTarget} onChange={e => setRotateTarget(e.target.value as any)}
+          className="w-full px-3 py-2 rounded-lg border text-sm"
+          style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-background)', color: 'var(--color-foreground)' }}>
+          <option value="concomitant">В сопутствующие</option>
+          <option value="background">В фоновые</option>
+          <option value="complications">В осложнения</option>
+        </select>
+      </div>
+
+      <div className="flex gap-2">
+        <button onClick={() => {
+          if (!currentVisit) return;
+          const oldPrimary = { ...currentVisit.diagnosis.primary };
+          // Добавляем старый основной в выбранную категорию
+          if (oldPrimary.code) {
+            addDiagnosisItem(rotateTarget, { code: oldPrimary.code, name: oldPrimary.name });
+          }
+          // Ставим новый основной
+          updatePrimaryDiagnosis({ code: rotateNewCode || currentVisit.diagnosis.primary.code, name: rotateNewName || currentVisit.diagnosis.primary.name });
+          setShowRotateDiagnosis(false);
+        }}
+          className="px-4 py-2 rounded-lg text-sm font-medium"
+          style={{ backgroundColor: 'var(--color-primary)', color: 'var(--color-primary-foreground)' }}>Сменить</button>
+        <button onClick={() => setShowRotateDiagnosis(false)}
+          className="px-4 py-2 rounded-lg text-sm border"
+          style={{ borderColor: 'var(--color-border)', color: 'var(--color-foreground)' }}>Отмена</button>
+      </div>
+    </div>
+  </div>
+)}
 
               <ProtocolGenerator isOpen={showProtocolGenerator} onClose={() => setShowProtocolGenerator(false)} />
 
