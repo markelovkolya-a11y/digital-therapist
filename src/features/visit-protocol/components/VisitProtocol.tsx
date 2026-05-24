@@ -1315,18 +1315,35 @@ useEffect(() => {
 
       <div className="flex gap-2">
         <button onClick={() => {
-          if (!currentVisit) return;
-          const oldPrimary = { ...currentVisit.diagnosis.primary };
-          // Добавляем старый основной в выбранную категорию
-          if (oldPrimary.code) {
-            addDiagnosisItem(rotateTarget, { code: oldPrimary.code, name: oldPrimary.name });
-          }
-          // Ставим новый основной
-          updatePrimaryDiagnosis({ code: rotateNewCode || currentVisit.diagnosis.primary.code, name: rotateNewName || currentVisit.diagnosis.primary.name });
-          setShowRotateDiagnosis(false);
-        }}
-          className="px-4 py-2 rounded-lg text-sm font-medium"
-          style={{ backgroundColor: 'var(--color-primary)', color: 'var(--color-primary-foreground)' }}>Сменить</button>
+  if (!currentVisit) return;
+  const oldPrimary = { ...currentVisit.diagnosis.primary };
+  const oldComplications = [...currentVisit.diagnosis.complications];
+  
+  // Переносим старый основной
+  if (oldPrimary.code) {
+    addDiagnosisItem(rotateTarget, { code: oldPrimary.code, name: oldPrimary.name });
+  }
+  
+  // Переносим осложнения в ту же категорию
+  for (const c of oldComplications) {
+    addDiagnosisItem(rotateTarget, { code: c.code, name: c.name });
+    removeDiagnosisItem('complications', c.code);
+  }
+  
+  // Ставим новый основной
+  updatePrimaryDiagnosis({ 
+    code: rotateNewCode || currentVisit.diagnosis.primary.code, 
+    name: rotateNewName || currentVisit.diagnosis.primary.name 
+  });
+  
+  setShowRotateDiagnosis(false);
+  setRotateNewCode('');
+  setRotateNewName('');
+}}
+  className="px-4 py-2 rounded-lg text-sm font-medium"
+  style={{ backgroundColor: 'var(--color-primary)', color: 'var(--color-primary-foreground)' }}>
+  Сменить
+</button>
         <button onClick={() => setShowRotateDiagnosis(false)}
           className="px-4 py-2 rounded-lg text-sm border"
           style={{ borderColor: 'var(--color-border)', color: 'var(--color-foreground)' }}>Отмена</button>
