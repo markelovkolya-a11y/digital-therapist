@@ -32,6 +32,7 @@ import { useAutoSave } from '../hooks/useAutoSave';
 import { complaintsRepo } from '@core/database/repositories/complaints.repo';
 import { SymptomHelperModal } from './SymptomHelperModal';
 import { checkRedFlags } from '@core/data/redFlags';
+import { ClinicalMinimumModal } from './ClinicalMinimumModal';
 
 // ========== ВСПОМОГАТЕЛЬНЫЕ КОМПОНЕНТЫ ==========
 
@@ -348,6 +349,7 @@ export function VisitProtocol() {
 const [rotateTarget, setRotateTarget] = useState<'complications' | 'concomitant' | 'background'>('concomitant');
 const [rotateNewCode, setRotateNewCode] = useState('');
 const [rotateNewName, setRotateNewName] = useState('');
+const [showClinicalMinimum, setShowClinicalMinimum] = useState(false);
 
   const selectedPatient = patients.find(p => p.id === selectedPatientId);
 
@@ -620,20 +622,92 @@ useEffect(() => {
                     <Save size={16} /> Сохранить (Ctrl+S)
                   </button>
                 </div>
+
+                {/* Сводка динамики */}
+{currentVisit.previousVitals && currentVisit.previousVitals.length > 0 && (
+  <div className="p-3 rounded-lg border text-xs" style={{ borderColor: '#3b82f6', backgroundColor: '#eff6ff' }}>
+    <div className="flex items-center gap-1.5 mb-1.5">
+      <span style={{ color: '#3b82f6' }}>📈</span>
+      <span className="font-medium" style={{ color: '#1e40af' }}>Динамика с прошлого визита</span>
+    </div>
+    <div className="flex flex-wrap gap-x-4 gap-y-1">
+      {[
+        { prevKey: 'systolic_bp', curKey: 'systolic', label: 'САД', unit: 'mmHg' },
+        { prevKey: 'diastolic_bp', curKey: 'diastolic', label: 'ДАД', unit: 'mmHg' },
+        { prevKey: 'heart_rate', curKey: 'heartRate', label: 'ЧСС', unit: 'уд/мин' },
+        { prevKey: 'weight', curKey: 'weight', label: 'Вес', unit: 'кг' },
+      ].map(item => {
+        const prev = currentVisit.previousVitals?.find(p => p.key === item.prevKey);
+        const cur = (currentVisit.vitals as any)[item.curKey] as number;
+        if (!prev || !cur) return null;
+        const diff = cur - Number(prev.value);
+        if (diff === 0) return null;
+        return (
+          <span key={item.prevKey}>
+            {item.label}: <span style={{ color: diff > 0 ? '#ef4444' : '#10b981', fontWeight: 600 }}>
+              {diff > 0 ? '↑' : '↓'} {Math.abs(diff)} {item.unit}
+            </span>
+          </span>
+        );
+      })}
+    </div>
+  </div>
+)}
               </div>
 
               {/* 1. Витальные показатели */}
+                            {/* 1. Витальные показатели */}
               <Section id="vitals" title="Витальные показатели" icon="📊"
                 expanded={expandedSections.includes('vitals')} onToggle={() => toggleSection('vitals')}>
                 <div className="grid grid-cols-4 gap-3">
-                  <Input label="САД" value={currentVisit.vitals.systolic || ''} onChange={v => updateVitals({ systolic: Number(v) })} suffix="mmHg" type="number" />
-                  <Input label="ДАД" value={currentVisit.vitals.diastolic || ''} onChange={v => updateVitals({ diastolic: Number(v) })} suffix="mmHg" type="number" />
-                  <Input label="ЧСС" value={currentVisit.vitals.heartRate || ''} onChange={v => updateVitals({ heartRate: Number(v) })} suffix="уд/мин" type="number" />
-                  <Input label="ЧДД" value={currentVisit.vitals.respiratoryRate || ''} onChange={v => updateVitals({ respiratoryRate: Number(v) })} suffix="/мин" type="number" />
-                  <Input label="SpO₂" value={currentVisit.vitals.spo2 || ''} onChange={v => updateVitals({ spo2: Number(v) })} suffix="%" type="number" />
-                  <Input label="t°" value={currentVisit.vitals.temperature || ''} onChange={v => updateVitals({ temperature: Number(v) })} suffix="°C" type="number" />
-                  <Input label="Рост" value={currentVisit.vitals.height || ''} onChange={v => updateVitals({ height: Number(v) })} suffix="см" type="number" />
-                  <Input label="Вес" value={currentVisit.vitals.weight || ''} onChange={v => updateVitals({ weight: Number(v) })} suffix="кг" type="number" />
+                  {[
+                    { key: 'systolic', label: 'САД', suffix: 'mmHg', prevKey: 'systolic_bp' },
+                    { key: 'diastolic', label: 'ДАД', suffix: 'mmHg', prevKey: 'diastolic_bp' },
+                    { key: 'heartRate', label: 'ЧСС', suffix: 'уд/мин', prevKey: 'heart_rate' },
+                    { key: 'respiratoryRate', label: 'ЧДД', suffix: '/мин', prevKey: 'respiratory_rate' },
+                    { key: 'spo2', label: 'SpO₂', suffix: '%', prevKey: 'spo2' },
+                    { key: 'temperature', label: 't°', suffix: '°C', prevKey: 'temperature' },
+                    { key: 'height', label: 'Рост', suffix: 'см', prevKey: 'height' },
+                    { key: 'weight', label: 'Вес', suffix: 'кг', prevKey: 'weight' },
+                  ].map(field => {
+                    const currentVal = (currentVisit.vitals as any)[field.key] as number;
+                    const prevParam = currentVisit.previousVitals?.find(p => p.key === field.prevKey);
+                    const prevVal = prevParam ? Number(prevParam.value) : null;
+                    const delta = prevVal && currentVal ? currentVal - prevVal : null;
+                    
+                    return (
+                      <div key={field.key}>
+                        <label className="block text-xs mb-1" style={{ color: 'var(--color-muted-foreground)' }}>{field.label}</label>
+                        <div className="relative">
+                          <input
+                            type="number"
+                            value={currentVal || ''}
+                            onChange={e => {
+                              const updates: any = {};
+                              updates[field.key] = Number(e.target.value);
+                              updateVitals(updates);
+                            }}
+                            className="w-full px-3 py-2 rounded-lg border text-sm outline-none focus:ring-2 focus:ring-primary"
+                            style={{
+                              borderColor: delta && Math.abs(delta) > 10 ? '#f59e0b' : 'var(--color-border)',
+                              backgroundColor: 'var(--color-background)',
+                              color: 'var(--color-foreground)',
+                            }} />
+                          <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs" style={{ color: 'var(--color-muted-foreground)' }}>
+                            {field.suffix}
+                          </span>
+                        </div>
+                        {delta !== null && delta !== 0 && (
+                          <div className="text-xs mt-0.5" style={{ color: delta > 0 ? '#ef4444' : '#10b981' }}>
+                            {delta > 0 ? '↑' : '↓'} {Math.abs(delta)} {prevVal !== null ? `(было ${prevVal})` : ''}
+                          </div>
+                        )}
+                        {prevVal !== null && delta === 0 && (
+                          <div className="text-xs mt-0.5" style={{ color: 'var(--color-muted-foreground)' }}>без изменений</div>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               </Section>
 
@@ -825,6 +899,18 @@ useEffect(() => {
                           className="p-2 rounded-lg border" style={{ borderColor: 'var(--color-border)', color: 'var(--color-muted-foreground)' }}>
                           <FileText size={14} />
                         </button>
+                      )}
+                                            {currentVisit.diagnosis.primary.code && (
+                        <button onClick={() => { setFormulationTarget({ type: 'primary' }); setShowFormulationModal(true); }}
+                          className="p-2 rounded-lg border" style={{ borderColor: 'var(--color-border)', color: 'var(--color-muted-foreground)' }}>
+                          <FileText size={14} />
+                        </button>
+                      )}
+                      {/* Кнопка клинического минимума */}
+                      {currentVisit.diagnosis.primary.code && (
+                        <button onClick={() => setShowClinicalMinimum(true)}
+                          className="p-2 rounded-lg border text-xs" style={{ borderColor: 'var(--color-border)', color: 'var(--color-muted-foreground)' }}
+                          title="Клинический минимум">📋</button>
                       )}
                     </div>
                     <label className="flex items-center gap-2 text-sm" style={{ color: 'var(--color-foreground)' }}>
@@ -1325,6 +1411,17 @@ useEffect(() => {
     </div>
   </div>
 )}
+
+<ClinicalMinimumModal
+  isOpen={showClinicalMinimum}
+  onClose={() => setShowClinicalMinimum(false)}
+  icdCode={currentVisit.diagnosis.primary.code}
+  onAddToPlan={(category, items) => {
+    for (const item of items) {
+      toggleExaminationItem(category === 'lab' ? 'labTests' : category === 'instrumental' ? 'instrumental' : 'consultations', item);
+    }
+  }}
+/>
 
               <ProtocolGenerator isOpen={showProtocolGenerator} onClose={() => setShowProtocolGenerator(false)} />
 

@@ -28,6 +28,8 @@ export const biopsychosocialService = {
         socialIsolation: (getParam('social_isolation') as any) || 'none',
         summary: String(getParam('summary') || ''),
         createdAt: events[0].recordedAt,
+        morseScore: Number(getParam('morse_score')) || 0,
+charlsonScore: Number(getParam('charlson_score')) || 0,
       };
     } catch {
       return null;
@@ -52,6 +54,8 @@ export const biopsychosocialService = {
         { key: 'care_access', value: input.careAccess, unit: '' },
         { key: 'social_isolation', value: input.socialIsolation, unit: '' },
         { key: 'summary', value: input.summary, unit: '' },
+        { key: 'morse_score', value: input.morseScore, unit: '' },
+{ key: 'charlson_score', value: input.charlsonScore, unit: '' },
       ],
     });
   },

@@ -1,17 +1,19 @@
 // core/types/biopsychosocial.ts
-// v1.0.0 — Типы для биопсихосоциального профиля
+// v1.1.0 — Добавлены шкала Морзе и индекс Чарлсон
 
 export interface BiopsychosocialProfile {
   patientId: string;
   date: string;
   
   // Био
-  barthelScore: number;           // 0-100, шкала Бартел
+  barthelScore: number;
+  morseScore: number;           // 0-125, шкала Морзе (риск падений)
+  charlsonScore: number;        // 0-37, индекс коморбидности Чарлсон
   mobility: 'independent' | 'assisted' | 'bedridden';
   
   // Психо
-  phq2Score: number;              // 0-6, скрининг депрессии
-  gad2Score: number;              // 0-6, скрининг тревоги
+  phq2Score: number;
+  gad2Score: number;
   
   // Социо
   housing: 'adequate' | 'crowded' | 'unsafe' | 'homeless';
@@ -20,7 +22,6 @@ export interface BiopsychosocialProfile {
   careAccess: 'none_needed' | 'partial_help' | 'full_dependency';
   socialIsolation: 'none' | 'moderate' | 'severe';
   
-  // Итоговая оценка
   summary: string;
   createdAt: string;
 }
