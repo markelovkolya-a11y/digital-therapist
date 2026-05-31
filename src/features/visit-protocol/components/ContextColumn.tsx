@@ -65,6 +65,7 @@ export function ContextColumn() {
   const [labModal, setLabModal] = useState(false);
   const [instrumentalModal, setInstrumentalModal] = useState<{ isOpen: boolean; waitingItem?: WaitingItemFull }>({ isOpen: false });
   const [addedToPlan, setAddedToPlan] = useState<Set<string>>(new Set());
+    const [problemWaiting, setProblemWaiting] = useState<Record<string, any[]>>({});
   const needsReload = useRef(false);
 
   const selectedPatient = patients.find(p => p.id === currentVisit?.patientId);
@@ -81,6 +82,12 @@ export function ContextColumn() {
       setEvents(allEvents);
       setWaitingItems(waiting);
       setProblems(problemsData);
+            // Загружаем направления для каждой проблемы
+      const pwMap: Record<string, any[]> = {};
+      for (const p of problemsData) {
+        pwMap[p.id] = await waitingService.getByProblem(p.id);
+      }
+      setProblemWaiting(pwMap);
       if (selectedPatient) {
         setScreeningItems(getScreeningStatus(selectedPatient, allEvents));
       }
@@ -380,12 +387,22 @@ export function ContextColumn() {
                   style={{ backgroundColor: '#10b981', color: 'white' }}>✓</button>
               </div>
             ))}
-            {problems.slice(0, 2).map(p => (
-              <div key={p.id} className="flex items-center gap-1">
-                <span style={{ color: '#ef4444' }}>●</span>
-                <span className="flex-1 truncate">{p.title}</span>
-                <button onClick={() => handleResolveProblem(p.id)}
-                  className="text-xs" style={{ color: '#10b981' }}>✓</button>
+                        {problems.slice(0, 2).map(p => (
+              <div key={p.id}>
+                <div className="flex items-center gap-1">
+                  <span style={{ color: '#ef4444' }}>●</span>
+                  <span className="text-xs font-medium flex-1 truncate" style={{ color: 'var(--color-foreground)' }}>{p.title}</span>
+                  <button onClick={() => handleResolveProblem(p.id)} className="text-xs" style={{ color: '#10b981' }}>✓</button>
+                </div>
+                {(problemWaiting[p.id] || []).slice(0, 2).map((w: any) => (
+                  <div key={w.id} className="flex items-center gap-1 ml-4">
+                    <span style={{ color: '#f59e0b', fontSize: '8px' }}>└</span>
+                    <span className="text-xs flex-1 truncate" style={{ color: 'var(--color-muted-foreground)' }}>{w.description}</span>
+                    <span className="text-xs" style={{ color: w.status === 'выполнен' ? '#10b981' : '#f59e0b' }}>
+                      {w.status === 'выполнен' ? '✓' : '…'}
+                    </span>
+                  </div>
+                ))}
               </div>
             ))}
           </div>
@@ -404,17 +421,43 @@ export function ContextColumn() {
           </div>
           <div className="space-y-0.5">
             {['systolic_bp', 'diastolic_bp', 'heart_rate', 'spo2', 'temperature'].map(key => {
-              const param = previousVitals.parameters.find(p => p.key === key);
-              if (!param) return null;
-              const label = paramLabel(key);
-              const value = param.value;
-              const unit = param.unit || '';
-              return (
-                <div key={key}>
-                  {label}: {value} {unit}
-                </div>
-              );
-            })}
+  const param = previousVitals.parameters.find(p => p.key === key);
+  if (!param) return null;
+  const label = paramLabel(key);
+  const value = Number(param.value);
+  
+  // Определяем цвет
+  let color = 'var(--color-foreground)';
+  if (key === 'systolic_bp') {
+    if (value >= 160) color = '#ef4444';
+    else if (value >= 140) color = '#f59e0b';
+    else color = '#10b981';
+  } else if (key === 'diastolic_bp') {
+    if (value >= 100) color = '#ef4444';
+    else if (value >= 90) color = '#f59e0b';
+    else color = '#10b981';
+  } else if (key === 'heart_rate') {
+    if (value > 110 || value < 50) color = '#ef4444';
+    else if (value > 90 || value < 60) color = '#f59e0b';
+    else color = '#10b981';
+  } else if (key === 'spo2') {
+    if (value < 90) color = '#ef4444';
+    else if (value < 95) color = '#f59e0b';
+    else color = '#10b981';
+  } else if (key === 'temperature') {
+    if (value > 38.0) color = '#ef4444';
+    else if (value > 37.0) color = '#f59e0b';
+    else if (value < 36.0) color = '#f59e0b';
+    else color = '#10b981';
+  }
+  
+  return (
+    <div key={key} className="flex items-center gap-1">
+      <span style={{ color, fontSize: '8px' }}>●</span>
+      <span style={{ color: 'var(--color-foreground)' }}>{label}: {value}</span>
+    </div>
+  );
+})}
           </div>
         </div>
       )}

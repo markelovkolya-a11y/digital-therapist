@@ -842,6 +842,50 @@ useEffect(() => {
                 expanded={expandedSections.includes('exam')} onToggle={() => toggleSection('exam')}
                 badge={`${currentVisit.physicalExam.filter(s => s.status === 'pathology').length} пат. / ${currentVisit.physicalExam.filter(s => s.status === 'not_examined').length} не осм.`}>
                 <div className="space-y-1">
+                  {/* Панель быстрых действий для статуса */}
+{currentVisit.previousExamSystems.length > 0 && (
+  <div className="flex gap-2 flex-wrap mb-3 p-3 rounded-lg border" style={{ borderColor: '#3b82f6', backgroundColor: '#eff6ff' }}>
+    <span className="text-xs font-medium w-full mb-1" style={{ color: '#1e40af' }}>⚡ Что изменилось с прошлого визита?</span>
+    <button onClick={() => {
+      // Все системы — без изменений
+      markAllSystemsUnchanged();
+      // Обновляем текст: добавляем "Без динамики" к патологиям
+      currentVisit.physicalExam.forEach((s, i) => {
+        if (s.status === 'pathology' && s.previousText) {
+          updateSystemExam(i, { text: s.previousText + ' (без динамики)' });
+        }
+      });
+    }}
+      className="px-3 py-1.5 rounded-lg text-xs font-medium border"
+      style={{ borderColor: '#10b981', color: '#10b981' }}>
+      ✅ Без изменений
+    </button>
+    <button onClick={() => {
+      // Патологии — улучшение
+      currentVisit.physicalExam.forEach((s, i) => {
+        if (s.status === 'pathology') {
+          updateSystemExam(i, { text: s.text + ' (улучшение: ' + new Date().toLocaleDateString('ru-RU') + ')' });
+        }
+      });
+    }}
+      className="px-3 py-1.5 rounded-lg text-xs font-medium border"
+      style={{ borderColor: '#3b82f6', color: '#3b82f6' }}>
+      ↑ Улучшение
+    </button>
+    <button onClick={() => {
+      // Патологии — ухудшение
+      currentVisit.physicalExam.forEach((s, i) => {
+        if (s.status === 'pathology') {
+          updateSystemExam(i, { text: s.text + ' (ухудшение: ' + new Date().toLocaleDateString('ru-RU') + ')' });
+        }
+      });
+    }}
+      className="px-3 py-1.5 rounded-lg text-xs font-medium border"
+      style={{ borderColor: '#ef4444', color: '#ef4444' }}>
+      ↓ Ухудшение
+    </button>
+  </div>
+)}
                   <div className="flex gap-2 flex-wrap mb-3">
                     <button onClick={setAllSystemsNormal}
                       className="px-3 py-1.5 rounded-lg text-xs font-medium border"

@@ -548,6 +548,16 @@ export const createVisitSlice: StateCreator<AppStore, [], [], VisitSlice> = (set
 
     await eventRepo.createBatch(events);
 
+        // Находим активную проблему для привязки направлений
+    let activeProblemId: string | undefined;
+    try {
+      const { problemsRepo } = await import('@core/database/repositories/problems.repo');
+      const activeProblems = await problemsRepo.findActive(visit.patientId);
+      if (activeProblems.length === 1) {
+        activeProblemId = activeProblems[0].id;
+      }
+    } catch {}
+
     const priorities = visit.examinationPlan.priorities || {};
 
     for (const test of visit.examinationPlan.labTests) {
@@ -563,6 +573,7 @@ export const createVisitSlice: StateCreator<AppStore, [], [], VisitSlice> = (set
           priority: prio.priority as any,
           deadline: deadline.toISOString().split('T')[0],
           status: 'ожидает',
+          problemId: activeProblemId, 
         });
       } catch (e) { console.warn('Ошибка создания waiting_item:', e); }
     }
@@ -580,6 +591,7 @@ export const createVisitSlice: StateCreator<AppStore, [], [], VisitSlice> = (set
           priority: prio.priority as any,
           deadline: deadline.toISOString().split('T')[0],
           status: 'ожидает',
+          problemId: activeProblemId, 
         });
       } catch (e) { console.warn('Ошибка создания waiting_item:', e); }
     }
@@ -597,6 +609,7 @@ export const createVisitSlice: StateCreator<AppStore, [], [], VisitSlice> = (set
           priority: prio.priority as any,
           deadline: deadline.toISOString().split('T')[0],
           status: 'ожидает',
+          problemId: activeProblemId, 
         });
       } catch (e) { console.warn('Ошибка создания waiting_item:', e); }
     }
