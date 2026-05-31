@@ -431,40 +431,50 @@ useEffect(() => {
     setTimeout(() => setToast(null), 3000);
   };
 
-  const handleSave = useCallback(async () => {
-    if (!currentVisit) return;
-    
-    const errors: string[] = [];
-    
-    if (!currentVisit.diagnosis.primary.code) {
-      errors.push('diagnosis');
+  const checkAllergy = (drugName: string): string | null => {
+  if (!currentVisit) return null;
+  const allergy = currentVisit.lifeHistory.allergy.toLowerCase();
+  if (allergy === 'аллергоанамнез не отягощён' || allergy === 'аллергоанамнез не отягощён.' || !allergy) return null;
+  const allergyWords = allergy.replace(/[.,]/g, '').toLowerCase().split(/\s+/).filter(w => w.length > 2);
+  const drugLower = drugName.toLowerCase();
+  for (const word of allergyWords) {
+    if (drugLower.includes(word)) {
+      return `⚠️ Пациент имеет аллергию: "${allergy}". Препарат "${drugName}" может вызвать реакцию.`;
     }
-    if (currentVisit.complaints.length === 0 && !currentVisit.anamnesis.text) {
-      errors.push('complaints');
-    }
-    if (currentVisit.treatment.medications.length === 0 && 
-        currentVisit.examinationPlan.labTests.length === 0 &&
-        currentVisit.examinationPlan.instrumental.length === 0 &&
-        currentVisit.examinationPlan.consultations.length === 0) {
-      errors.push('treatment');
-    }
-    
-    if (errors.length > 0) {
-      setValidationErrors(errors);
-      showToast('⚠️ Заполните обязательные поля (подсвечены красным)');
-      const sectionsToOpen = new Set(expandedSections);
-      if (errors.includes('diagnosis')) sectionsToOpen.add('diagnosis');
-      if (errors.includes('complaints')) sectionsToOpen.add('complaints');
-      if (errors.includes('treatment')) sectionsToOpen.add('treatment');
-      setExpandedSections([...sectionsToOpen]);
-      setTimeout(() => setValidationErrors([]), 5000);
-      return;
-    }
-    
+  }
+  return null;
+};
+
+  const [saving, setSaving] = useState(false);
+
+const handleSave = useCallback(async () => {
+  if (!currentVisit) return;
+  const errors: string[] = [];
+  if (!currentVisit.diagnosis.primary.code) errors.push('diagnosis');
+  if (currentVisit.complaints.length === 0 && !currentVisit.anamnesis.text) errors.push('complaints');
+  if (currentVisit.treatment.medications.length === 0 && currentVisit.examinationPlan.labTests.length === 0 && currentVisit.examinationPlan.instrumental.length === 0 && currentVisit.examinationPlan.consultations.length === 0) errors.push('treatment');
+  if (errors.length > 0) {
+    setValidationErrors(errors);
+    showToast('⚠️ Заполните обязательные поля');
+    const sectionsToOpen = new Set(expandedSections);
+    if (errors.includes('diagnosis')) sectionsToOpen.add('diagnosis');
+    if (errors.includes('complaints')) sectionsToOpen.add('complaints');
+    if (errors.includes('treatment')) sectionsToOpen.add('treatment');
+    setExpandedSections([...sectionsToOpen]);
+    setTimeout(() => setValidationErrors([]), 5000);
+    return;
+  }
+  setSaving(true);
+  try {
     await saveVisit();
     if (currentVisit) clearDraft(currentVisit.patientId);
     showToast('✅ Протокол сохранён');
-  }, [saveVisit, currentVisit, clearDraft, expandedSections]);
+  } catch (e) {
+    showToast('❌ Ошибка сохранения');
+  } finally {
+    setSaving(false);
+  }
+}, [saveVisit, currentVisit, clearDraft, expandedSections]);
 
   const handleEditMed = (med: import('@core/types/visit').MedicationState) => {
     setEditingMed({
@@ -475,6 +485,11 @@ useEffect(() => {
   };
 
   const handleSaveMed = () => {
+      const drugName = editingMed ? editingMed.name : newMed.name;
+  if (drugName) {
+    const warning = checkAllergy(drugName);
+    if (warning && !confirm(warning + '\n\nВсё равно назначить?')) return;
+  }
     if (editingMed) {
       removeMedication(editingMed.id);
       addMedication({
@@ -616,11 +631,11 @@ useEffect(() => {
                     style={{ borderColor: 'var(--color-primary)', color: 'var(--color-primary)' }}>
                     <FileText size={16} /> Протокол ЕМИАС
                   </button>
-                  <button onClick={handleSave}
-                    className="flex items-center gap-2 px-5 py-2.5 rounded-lg text-sm font-medium transition-colors"
-                    style={{ backgroundColor: 'var(--color-primary)', color: 'var(--color-primary-foreground)' }}>
-                    <Save size={16} /> Сохранить (Ctrl+S)
-                  </button>
+                  <button onClick={handleSave} disabled={saving}
+  className="flex items-center gap-2 px-5 py-2.5 rounded-lg text-sm font-medium transition-colors"
+  style={{ backgroundColor: saving ? '#6b7280' : 'var(--color-primary)', color: 'var(--color-primary-foreground)', opacity: saving ? 0.7 : 1 }}>
+  {saving ? '⏳ Сохранение...' : <><Save size={16} /> Сохранить (Ctrl+S)</>}
+</button>
                 </div>
 
                 {/* Сводка динамики */}
@@ -931,7 +946,7 @@ useEffect(() => {
                           backgroundColor: validationErrors.includes('diagnosis') ? '#fef2f2' : 'var(--color-card)',
                           color: currentVisit.diagnosis.primary.code ? 'var(--color-primary)' : 'var(--color-muted-foreground)',
                         }}>
-                        {currentVisit.diagnosis.primary.code || '🔍 Код...'}
+                        {currentVisit.diagnosis.primary.code || '🔍 Код... *'}
                       </button>
                       <input type="text" value={currentVisit.diagnosis.primary.name}
                         onChange={e => updatePrimaryDiagnosis({ name: e.target.value })}
@@ -1363,8 +1378,13 @@ useEffect(() => {
                 icd10Code={getFormulationCode()} />
 
               <MedicationSearchModal isOpen={showMedicationSearch} onClose={() => setShowMedicationSearch(false)}
-  onSelect={(inn, dosage, frequency, isBasic) => {
-    addMedication({ name: inn, dose: dosage, frequency, duration: isBasic ? 'постоянно' : '30 дней', isBasic });
+  onSelect={(inn, dosage, frequency, duration, isBasic) => {
+    const warning = checkAllergy(inn);
+    if (warning && !confirm(warning + '\n\nВсё равно назначить?')) {
+      setShowMedicationSearch(false);
+      return;
+    }
+    addMedication({ name: inn, dose: dosage, frequency, duration, isBasic });
     setShowMedicationSearch(false);
   }} />
 
